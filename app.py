@@ -6,9 +6,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-# ================================
 # CLASSIFICATION MODEL
-# ================================
 
 MODEL_PATH = "Karyl-Maxine/disaster-distilroberta"
 THRESHOLD = 0.65
@@ -41,9 +39,7 @@ def predict_emergency(text):
 
     return positive_prob > THRESHOLD, positive_prob
 
-# ================================
 # TEXT CLEANING
-# ================================
 
 def clean_text(text):
     text = text.lower()
@@ -51,9 +47,7 @@ def clean_text(text):
     text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text
 
-# ================================
 # REAL RAG SETUP
-# ================================
 
 # Knowledge documents (you can expand or load from files)
 DOCS = [
@@ -83,9 +77,7 @@ def rag_retrieve(query, k=3):
     distances, indices = index.search(query_embedding, k)
     return [DOCS[i] for i in indices[0]]
 
-# ================================
 # KEYWORD REASONING (optional)
-# ================================
 
 EMERGENCY_KEYWORDS = {
     "fire": ["fire", "massive fire", "burning", "flames", "smoke", "inferno"],
@@ -106,9 +98,7 @@ def find_trigger_keywords(text):
 
     return matches
 
-# ================================
 # CLASSIFY INCIDENT TYPE (BASIC)
-# ================================
 
 def classify_incident(text):
     if "fire" in text:
@@ -121,9 +111,7 @@ def classify_incident(text):
         return "explosion"
     return "unknown"
 
-# ================================
 # PIPELINE (CLASSIFICATION + RAG)
-# ================================
 
 def respondrAI_pipeline(text):
 
@@ -157,14 +145,11 @@ def respondrAI_pipeline(text):
         "dispatch": "Fire Department" if incident_type == "fire" else "Disaster Response Team"
     }
 
-# ================================
 # STREAMLIT UI
-# ================================
 
 st.set_page_config(page_title="RespondrAI RAG Agent", page_icon="🚨")
 
-st.title("🚨 RespondrAI - Agentic + Real RAG")
-st.markdown("Hybrid classifier + vector RAG + action guidance")
+st.title("🚨 RespondrAI")
 
 user_input = st.text_area("Enter an incident report or tweet:")
 
@@ -175,10 +160,10 @@ if st.button("Analyze"):
         result = respondrAI_pipeline(user_input)
 
         if not result["emergency"]:
-            st.success("✅ No emergency detected.")
+            st.success("No emergency detected.")
             st.write("Confidence:", result["confidence"])
         else:
-            st.error("🚨 Emergency Detected!")
+            st.error("Emergency Detected!")
             st.write("Type:", result["type"])
             st.write("Urgency:", result["urgency"])
             st.write("Dispatch:", result["dispatch"])
