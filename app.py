@@ -1,14 +1,13 @@
 import streamlit as st
 import torch
+import requests
+import os
 import re
-import faiss
-import numpy as np
-from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-# ================================
-# CLASSIFICATION MODEL
-# ================================
+# =============================
+# HuggingFace Fine-Tuned Model
+# =============================
 
 MODEL_PATH = "Karyl-Maxine/disaster-distilroberta"
 THRESHOLD = 0.65
@@ -39,11 +38,58 @@ def predict_emergency(text):
         probs = torch.softmax(outputs.logits, dim=1)
         positive_prob = probs[:, 1].item()
 
-    return positive_prob > THRESHOLD, positive_prob
+    label = 1 if positive_prob > THRESHOLD else 0
 
-# ================================
-# TEXT CLEANING
-# ================================
+    return label, positive_prob
+
+
+# =============================
+# Zero-Shot Incident Classifier
+# =============================
+
+HF_API_URL = "https://router.huggingface.co/hf-inference/models/facebook/bart-large-mnli"
+
+HF_HEADERS = {
+    "Authorization": f"Bearer {os.getenv('HF_TOKEN')}"
+}
+
+def hf_zero_shot(text, labels):
+    payload = {
+        "inputs": text,
+        "parameters": {"candidate_labels": labels}
+    }
+
+    response = requests.post(
+        HF_API_URL,
+        headers=HF_HEADERS,
+        json=payload,
+        timeout=30
+    )
+
+    if response.status_code != 200:
+        raise Exception(f"HF API Error: {response.status_code}\n{response.text}")
+
+    result = response.json()
+
+    if isinstance(result, dict):
+        result = [result]
+
+    return result
+
+incident_labels = [
+    "fire",
+    "flood",
+    "earthquake",
+    "hurricane",
+    "explosion",
+    "wildfire",
+    "building collapse",
+    "transport accident"
+]
+
+# =============================
+# Text Cleaning
+# =============================
 
 def clean_text(text):
     text = text.lower()
@@ -51,126 +97,92 @@ def clean_text(text):
     text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text
 
-# ================================
-# REAL RAG SETUP
-# ================================
 
-# Knowledge documents (you can expand or load from files)
-DOCS = [
-"Fire emergencies require immediate evacuation and contacting the fire department.",
-"Do not use elevators during a fire.",
-"Stay low to avoid smoke inhalation.",
-"Earthquakes require drop, cover, and hold.",
-"After an earthquake, check for structural damage before reentering buildings.",
-"Flood areas require moving to higher ground and avoiding floodwaters.",
-"Explosions may cause structural damage and secondary hazards.",
-"Call emergency services if anyone is injured."
-]
+# =============================
+# Severity Agent
+# =============================
 
-# Embedding model (lightweight)
-embedder = SentenceTransformer('all-MiniLM-L6-v2')
+class SeverityAgent:
+    def assess(self, text):
+        high_keywords = ["urgent", "help", "critical", "injured", "dead"]
+        if any(word in text for word in high_keywords):
+            return "High"
+        return "Medium"
 
-def embed(text):
-    return embedder.encode([text])
+severity_agent = SeverityAgent()
 
-# Build FAISS vector index
-doc_embeddings = np.vstack([embed(d) for d in DOCS])
-index = faiss.IndexFlatL2(doc_embeddings.shape[1])
-index.add(doc_embeddings)
+# =============================
+# Dispatch Agent
+# =============================
 
-def rag_retrieve(query, k=3):
-    query_embedding = embed(query)
-    distances, indices = index.search(query_embedding, k)
-    return [DOCS[i] for i in indices[0]]
+class DispatchAgent:
+    def route(self, incident_type):
+        routing_map = {
+            "fire": "Fire Department",
+            "flood": "Disaster Response Team",
+            "earthquake": "Disaster Response Team",
+            "hurricane": "Disaster Response Team",
+            "explosion": "Police & Fire Department",
+            "wildfire": "Fire Department",
+            "building collapse": "EMS & Fire Department",
+            "transport accident": "EMS & Police"
+        }
+        return routing_map.get(incident_type, "General Emergency Unit")
 
-# ================================
-# KEYWORD REASONING (optional)
-# ================================
+dispatch_agent = DispatchAgent()
 
-EMERGENCY_KEYWORDS = {
-    "fire": ["fire", "massive fire", "burning", "flames", "smoke", "inferno"],
-    "flood": ["flood", "flooded", "rising water", "submerged", "inundated"],
-    "earthquake": ["earthquake", "tremor", "shake", "seismic", "aftershock"],
-    "explosion": ["explosion", "blast", "boom", "detonation"],
-    "injury": ["injured", "bleeding", "unconscious", "hurt", "wounded"]
-}
-
-def find_trigger_keywords(text):
-    text = text.lower()
-    matches = []
-
-    for category, words in EMERGENCY_KEYWORDS.items():
-        for word in words:
-            if word in text:
-                matches.append(word)
-
-    return matches
-
-# ================================
-# CLASSIFY INCIDENT TYPE (BASIC)
-# ================================
-
-def classify_incident(text):
-    if "fire" in text:
-        return "fire"
-    if "flood" in text:
-        return "flood"
-    if "earthquake" in text:
-        return "earthquake"
-    if "explosion" in text:
-        return "explosion"
-    return "unknown"
-
-# ================================
-# PIPELINE (CLASSIFICATION + RAG)
-# ================================
+# =============================
+# Main Pipeline
+# =============================
 
 def respondrAI_pipeline(text):
 
     cleaned = clean_text(text)
 
+    # Step 1: Emergency Detection
     is_emergency, confidence = predict_emergency(cleaned)
 
-    if not is_emergency:
+    if is_emergency == 0:
         return {
             "emergency": False,
             "confidence": round(confidence, 3),
             "message": "No emergency detected."
         }
 
-    incident_type = classify_incident(cleaned)
-    keywords = find_trigger_keywords(cleaned)
+    # Step 2: Incident Classification
+    hf_result = hf_zero_shot(cleaned, incident_labels)
+    incident_type = hf_result[0]['label']
 
-    # REAL RAG retrieval
-    rag_docs = rag_retrieve(cleaned)
+    # Step 3: Severity
+    priority = severity_agent.assess(cleaned)
+
+    # Step 4: Dispatch
+    unit = dispatch_agent.route(incident_type)
 
     return {
         "emergency": True,
-        "type": incident_type,
-        "urgency": "high",
         "confidence": round(confidence, 3),
-        "reason": [
-            f"Input contains keywords: {keywords}" if keywords else "No direct emergency keywords detected.",
-            "Knowledge base matches documents:"
-        ] + rag_docs,
-        "actions": rag_docs,
-        "dispatch": "Fire Department" if incident_type == "fire" else "Disaster Response Team"
+        "incident_type": incident_type,
+        "priority": priority,
+        "dispatch_to": unit
     }
 
-# ================================
-# STREAMLIT UI
-# ================================
 
-st.set_page_config(page_title="RespondrAI RAG Agent", page_icon="🚨")
+# =============================
+# Streamlit UI
+# =============================
 
-st.title("🚨 RespondrAI - Agentic + Real RAG")
-st.markdown("Hybrid classifier + vector RAG + action guidance")
+st.set_page_config(page_title="RespondrAI", page_icon="🚨")
 
-user_input = st.text_area("Enter an incident report or tweet:")
+st.title("🚨 RespondrAI")
+st.markdown("Agentic AI for Emergency Incident Classification & Dispatch")
 
-if st.button("Analyze"):
-    if not user_input.strip():
-        st.warning("Please enter text.")
+user_input = st.text_area("Enter a tweet or emergency report:")
+
+if st.button("Analyze Incident"):
+
+    if user_input.strip() == "":
+        st.warning("Please enter text first.")
     else:
         result = respondrAI_pipeline(user_input)
 
@@ -179,15 +191,7 @@ if st.button("Analyze"):
             st.write("Confidence:", result["confidence"])
         else:
             st.error("🚨 Emergency Detected!")
-            st.write("Type:", result["type"])
-            st.write("Urgency:", result["urgency"])
-            st.write("Dispatch:", result["dispatch"])
             st.write("Confidence:", result["confidence"])
-
-            st.write("### Reason")
-            for r in result["reason"]:
-                st.write(f"- {r}")
-
-            st.write("### Recommended Actions")
-            for a in result["actions"]:
-                st.write(f"- {a}")
+            st.write("**Incident Type:**", result["incident_type"])
+            st.write("**Priority Level:**", result["priority"])
+            st.write("**Dispatch To:**", result["dispatch_to"])
