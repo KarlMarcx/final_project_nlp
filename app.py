@@ -3,10 +3,14 @@ import torch
 import re
 import faiss
 import numpy as np
+import requests
+import os
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
+# =============================
 # CLASSIFICATION MODEL
+# =============================
 
 MODEL_PATH = "Karyl-Maxine/disaster-distilroberta"
 THRESHOLD = 0.65
@@ -39,7 +43,9 @@ def predict_emergency(text):
 
     return positive_prob > THRESHOLD, positive_prob
 
+# =============================
 # TEXT CLEANING
+# =============================
 
 def clean_text(text):
     text = text.lower()
@@ -47,9 +53,10 @@ def clean_text(text):
     text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text
 
+# =============================
 # REAL RAG SETUP
+# =============================
 
-# Knowledge documents (you can expand or load from files)
 DOCS = [
 "Fire emergencies require immediate evacuation and contacting the fire department.",
 "Do not use elevators during a fire.",
@@ -61,13 +68,11 @@ DOCS = [
 "Call emergency services if anyone is injured."
 ]
 
-# Embedding model (lightweight)
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
 
 def embed(text):
     return embedder.encode([text])
 
-# Build FAISS vector index
 doc_embeddings = np.vstack([embed(d) for d in DOCS])
 index = faiss.IndexFlatL2(doc_embeddings.shape[1])
 index.add(doc_embeddings)
@@ -77,7 +82,43 @@ def rag_retrieve(query, k=3):
     distances, indices = index.search(query_embedding, k)
     return [DOCS[i] for i in indices[0]]
 
-# KEYWORD REASONING (optional)
+# =============================
+# LLM GENERATION (HUGGINGFACE)
+# =============================
+
+HF_LLM_URL = "https://router.huggingface.co/hf-inference/models/facebook/bart-large-cnn"
+
+def generate_llm_response(prompt):
+    headers = {
+        "Authorization": f"Bearer {os.getenv('HF_TOKEN')}"
+    }
+
+    payload = {"inputs": prompt}
+
+    try:
+        response = requests.post(
+            HF_LLM_URL,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            return "LLM response unavailable."
+
+        result = response.json()
+
+        if isinstance(result, list) and len(result) > 0:
+            return result[0].get("summary_text", "")
+
+        return str(result)
+
+    except Exception:
+        return "LLM response error."
+
+# =============================
+# KEYWORD REASONING
+# =============================
 
 EMERGENCY_KEYWORDS = {
     "fire": ["fire", "massive fire", "burning", "flames", "smoke", "inferno"],
@@ -98,7 +139,9 @@ def find_trigger_keywords(text):
 
     return matches
 
-# CLASSIFY INCIDENT TYPE (BASIC)
+# =============================
+# INCIDENT CLASSIFICATION
+# =============================
 
 def classify_incident(text):
     text = text.lower()
@@ -114,7 +157,9 @@ def classify_incident(text):
 
     return "unknown"
 
-# PIPELINE (CLASSIFICATION + RAG)
+# =============================
+# PIPELINE (CLASSIFICATION + RAG + LLM)
+# =============================
 
 def respondrAI_pipeline(text):
 
@@ -132,16 +177,19 @@ def respondrAI_pipeline(text):
     incident_type = classify_incident(cleaned)
     keywords = find_trigger_keywords(cleaned)
 
-    # REAL RAG retrieval
     rag_docs = rag_retrieve(cleaned)
 
-    # 🔥 PRO-LEVEL FALLBACK
+    # fallback type inference
     if incident_type == "unknown" and len(rag_docs) > 0:
-        top_doc = rag_docs[0]
-        inferred_type = classify_incident(top_doc)
+        inferred = classify_incident(rag_docs[0])
+        if inferred != "unknown":
+            incident_type = inferred
 
-        if inferred_type != "unknown":
-            incident_type = inferred_type
+    # LLM explanation using RAG context
+    llm_context = " ".join(rag_docs)
+    llm_explanation = generate_llm_response(
+        f"Explain this emergency situation: {llm_context}"
+    )
 
     return {
         "emergency": True,
@@ -153,14 +201,17 @@ def respondrAI_pipeline(text):
             "Knowledge base matches documents:"
         ] + rag_docs,
         "actions": rag_docs,
+        "llm_explanation": llm_explanation,
         "dispatch": "Fire Department" if incident_type == "fire" else "Disaster Response Team"
     }
 
+# =============================
 # STREAMLIT UI
+# =============================
 
-st.set_page_config(page_title="RespondrAI RAG Agent", page_icon="🚨")
+st.set_page_config(page_title="RespondrAI Hybrid Agent", page_icon="🚨")
 
-st.title("🚨 RespondrAI")
+st.title("🚨 RespondrAI - Hybrid Agent (LLM + RAG)")
 
 user_input = st.text_area("Enter an incident report or tweet:")
 
@@ -187,3 +238,6 @@ if st.button("Analyze"):
             st.write("### Recommended Actions")
             for a in result["actions"]:
                 st.write(f"- {a}")
+
+            st.write("### AI Explanation (LLM)")
+            st.write(result["llm_explanation"])
