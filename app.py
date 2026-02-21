@@ -117,6 +117,29 @@ def generate_llm_response(prompt):
         return "LLM response error."
 
 # =============================
+# KEYWORD REASONING
+# =============================
+
+EMERGENCY_KEYWORDS = {
+    "fire": ["fire", "massive fire", "burning", "flames", "smoke", "inferno"],
+    "flood": ["flood", "flooded", "rising water", "submerged", "inundated"],
+    "earthquake": ["earthquake", "tremor", "shake", "seismic", "aftershock"],
+    "explosion": ["explosion", "blast", "boom", "detonation"],
+    "injury": ["injured", "bleeding", "unconscious", "hurt", "wounded"]
+}
+
+def find_trigger_keywords(text):
+    text = text.lower()
+    matches = []
+
+    for category, words in EMERGENCY_KEYWORDS.items():
+        for word in words:
+            if word in text:
+                matches.append(word)
+
+    return matches
+
+# =============================
 # INCIDENT CLASSIFICATION
 # =============================
 
