@@ -117,29 +117,6 @@ def generate_llm_response(prompt):
         return "LLM response error."
 
 # =============================
-# KEYWORD REASONING
-# =============================
-
-EMERGENCY_KEYWORDS = {
-    "fire": ["fire", "massive fire", "burning", "flames", "smoke", "inferno"],
-    "flood": ["flood", "flooded", "rising water", "submerged", "inundated"],
-    "earthquake": ["earthquake", "tremor", "shake", "seismic", "aftershock"],
-    "explosion": ["explosion", "blast", "boom", "detonation"],
-    "injury": ["injured", "bleeding", "unconscious", "hurt", "wounded"]
-}
-
-def find_trigger_keywords(text):
-    text = text.lower()
-    matches = []
-
-    for category, words in EMERGENCY_KEYWORDS.items():
-        for word in words:
-            if word in text:
-                matches.append(word)
-
-    return matches
-
-# =============================
 # INCIDENT CLASSIFICATION
 # =============================
 
@@ -196,10 +173,6 @@ def respondrAI_pipeline(text):
         "type": incident_type,
         "urgency": "high",
         "confidence": round(confidence, 3),
-        "reason": [
-            f"Input contains keywords: {keywords}" if keywords else "No direct emergency keywords detected.",
-            "Knowledge base matches documents:"
-        ] + rag_docs,
         "actions": rag_docs,
         "llm_explanation": llm_explanation,
         "dispatch": "Fire Department" if incident_type == "fire" else "Disaster Response Team"
@@ -230,10 +203,6 @@ if st.button("Analyze"):
             st.write("Urgency:", result["urgency"])
             st.write("Dispatch:", result["dispatch"])
             st.write("Confidence:", result["confidence"])
-
-            st.write("### Reason")
-            for r in result["reason"]:
-                st.write(f"- {r}")
 
             st.write("### Recommended Actions")
             for a in result["actions"]:
