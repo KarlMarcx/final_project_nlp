@@ -132,6 +132,14 @@ def respondrAI_pipeline(text):
     # REAL RAG retrieval
     rag_docs = rag_retrieve(cleaned)
 
+    # 🔥 PRO-LEVEL FALLBACK
+    if incident_type == "unknown" and len(rag_docs) > 0:
+        top_doc = rag_docs[0]
+        inferred_type = classify_incident(top_doc)
+
+        if inferred_type != "unknown":
+            incident_type = inferred_type
+
     return {
         "emergency": True,
         "type": incident_type,
@@ -163,7 +171,7 @@ if st.button("Analyze"):
             st.success("No emergency detected.")
             st.write("Confidence:", result["confidence"])
         else:
-            st.error("Emergency Detected!")
+            st.error("🚨 Emergency Detected!")
             st.write("Type:", result["type"])
             st.write("Urgency:", result["urgency"])
             st.write("Dispatch:", result["dispatch"])
