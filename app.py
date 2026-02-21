@@ -101,14 +101,17 @@ def find_trigger_keywords(text):
 # CLASSIFY INCIDENT TYPE (BASIC)
 
 def classify_incident(text):
-    if "fire" in text:
-        return "fire"
-    if "flood" in text:
-        return "flood"
-    if "earthquake" in text:
-        return "earthquake"
-    if "explosion" in text:
-        return "explosion"
+    text = text.lower()
+    scores = {}
+
+    for category, words in EMERGENCY_KEYWORDS.items():
+        scores[category] = sum(word in text for word in words)
+
+    best_match = max(scores, key=scores.get)
+
+    if scores[best_match] > 0:
+        return best_match
+
     return "unknown"
 
 # PIPELINE (CLASSIFICATION + RAG)
