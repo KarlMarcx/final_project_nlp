@@ -55,12 +55,12 @@ def clean_text(text):
     return text.strip()
 
 # =============================
-# SEMANTIC INCIDENT CLASSIFIER
+# SEMANTIC CATEGORY DETECTION
 # =============================
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-DISASTER_CATEGORIES = [
+EMERGENCY_CATEGORIES = [
     "fire",
     "flood",
     "earthquake",
@@ -74,15 +74,20 @@ DISASTER_CATEGORIES = [
     "drought",
     "pandemic",
     "shooting",
-    "chemical spill"
+    "violence",
+    "medical emergency",
+    "death incident",
+    "accident",
+    "chemical spill",
+    "public disturbance"
 ]
 
 category_embeddings = embedder.encode(
-    DISASTER_CATEGORIES,
+    EMERGENCY_CATEGORIES,
     normalize_embeddings=True
 )
 
-def detect_incidents_semantic(text, threshold=0.40, top_k=2):
+def detect_incidents_semantic(text, threshold=0.38, top_k=2):
     query_embedding = embedder.encode(
         [text],
         normalize_embeddings=True
@@ -94,67 +99,83 @@ def detect_incidents_semantic(text, threshold=0.40, top_k=2):
     detected = []
     for idx in top_indices:
         if similarities[idx] >= threshold:
-            detected.append(DISASTER_CATEGORIES[idx])
+            detected.append(EMERGENCY_CATEGORIES[idx])
 
     return detected
 
 # =============================
-# STRONG CATEGORY-BASED RAG
+# KNOWLEDGE BASE (EXPANDED)
 # =============================
 
 KNOWLEDGE_BASE = {
+
     "fire": [
-        "Evacuate immediately and call the fire department.",
+        "Evacuate immediately and contact the fire department.",
         "Do not use elevators during a fire.",
         "Stay low to avoid smoke inhalation.",
-        "Use fire extinguishers only if trained.",
-        "Check doors for heat before opening."
+        "Use fire extinguishers only if trained."
     ],
+
     "flood": [
         "Move to higher ground immediately.",
         "Avoid walking or driving through floodwaters.",
-        "Turn off electricity if safe to do so.",
-        "Prepare emergency supplies and clean water.",
-        "Follow local evacuation advisories."
+        "Turn off electricity if safe.",
+        "Follow evacuation advisories."
     ],
+
     "earthquake": [
         "Drop, cover, and hold on.",
-        "Stay away from windows and heavy objects.",
-        "After shaking stops, check for injuries.",
-        "Do not reenter damaged buildings.",
-        "Expect aftershocks."
+        "Stay away from windows.",
+        "Check for injuries after shaking stops.",
+        "Avoid reentering damaged buildings."
     ],
-    "storm": [
-        "Stay indoors and away from windows.",
-        "Secure outdoor objects.",
-        "Monitor official weather updates.",
-        "Prepare emergency kit.",
-        "Avoid flooded roads."
+
+    "medical emergency": [
+        "Call emergency medical services immediately.",
+        "Check for breathing and pulse.",
+        "Begin CPR if trained.",
+        "Keep the person stable until responders arrive."
     ],
-    "explosion": [
-        "Move away from the blast area immediately.",
-        "Check for secondary hazards.",
+
+    "death incident": [
+        "Contact emergency authorities immediately.",
+        "Do not disturb the scene.",
+        "Allow medical professionals to assess.",
+        "Provide information to responders."
+    ],
+
+    "shooting": [
+        "Seek immediate shelter.",
+        "Call law enforcement.",
+        "Avoid confrontation.",
+        "Provide first aid if safe."
+    ],
+
+    "accident": [
+        "Ensure scene safety.",
+        "Call emergency responders.",
         "Assist injured if safe.",
-        "Avoid unstable structures.",
-        "Contact emergency responders."
+        "Do not move seriously injured victims."
     ],
-    "collapse": [
-        "Evacuate unstable structures immediately.",
-        "Avoid entering damaged buildings.",
-        "Call search and rescue teams.",
-        "Watch for falling debris.",
-        "Check for trapped individuals."
-    ],
-    "pandemic": [
-        "Follow public health guidelines.",
-        "Wear protective masks if required.",
-        "Practice social distancing.",
-        "Wash hands frequently.",
-        "Seek medical advice if symptomatic."
+
+    "violence": [
+        "Move to a safe location.",
+        "Contact authorities immediately.",
+        "Avoid escalating the situation."
     ]
 }
 
-# Build FAISS index per category using cosine similarity
+GENERAL_EMERGENCY_DOCS = [
+    "Call emergency services immediately.",
+    "Ensure your own safety first.",
+    "Provide clear information to responders.",
+    "Assist others only if it is safe to do so."
+]
+
+# =============================
+# BUILD FAISS INDICES (COSINE)
+# =============================
+
 faiss_indices = {}
 
 for category, docs in KNOWLEDGE_BASE.items():
@@ -163,9 +184,18 @@ for category, docs in KNOWLEDGE_BASE.items():
         normalize_embeddings=True
     )
     dim = embeddings.shape[1]
-    index = faiss.IndexFlatIP(dim)  # Inner product = cosine (normalized)
+    index = faiss.IndexFlatIP(dim)
     index.add(np.array(embeddings))
     faiss_indices[category] = (index, docs)
+
+general_embeddings = embedder.encode(
+    GENERAL_EMERGENCY_DOCS,
+    normalize_embeddings=True
+)
+
+dim = general_embeddings.shape[1]
+general_index = faiss.IndexFlatIP(dim)
+general_index.add(np.array(general_embeddings))
 
 def rag_retrieve(query, categories, k=3):
     query_embedding = embedder.encode(
@@ -174,6 +204,14 @@ def rag_retrieve(query, categories, k=3):
     )
 
     results = []
+
+    # If no specific category detected → fallback
+    if not categories:
+        distances, indices = general_index.search(
+            np.array(query_embedding),
+            min(k, len(GENERAL_EMERGENCY_DOCS))
+        )
+        return [GENERAL_EMERGENCY_DOCS[i] for i in indices[0]]
 
     for category in categories:
         if category in faiss_indices:
@@ -185,20 +223,27 @@ def rag_retrieve(query, categories, k=3):
             for i in indices[0]:
                 results.append(docs[i])
 
-    return list(set(results))  # remove duplicates
+    if not results:
+        # Safety fallback
+        distances, indices = general_index.search(
+            np.array(query_embedding),
+            min(k, len(GENERAL_EMERGENCY_DOCS))
+        )
+        return [GENERAL_EMERGENCY_DOCS[i] for i in indices[0]]
+
+    return list(set(results))
 
 # =============================
-# SEVERITY SCORING
+# SEVERITY
 # =============================
 
 def calculate_severity(confidence, detected_categories):
+    score = confidence * 2 + len(detected_categories)
 
-    score = 0
-    score += confidence * 2
-    score += len(detected_categories)
-
-    if "injury" in detected_categories:
+    if "death incident" in detected_categories:
         score += 2
+    if "medical emergency" in detected_categories:
+        score += 1.5
 
     if score >= 5:
         return "Critical"
@@ -210,17 +255,18 @@ def calculate_severity(confidence, detected_categories):
         return "Low"
 
 # =============================
-# DISPATCH LOGIC
+# DISPATCH
 # =============================
 
 DISPATCH_MAP = {
     "fire": "Fire Department",
     "flood": "Flood Rescue Unit",
     "earthquake": "Search and Rescue Team",
-    "storm": "Disaster Response Unit",
-    "explosion": "Bomb Disposal Unit",
-    "collapse": "Urban Search and Rescue",
-    "pandemic": "Public Health Emergency Unit"
+    "medical emergency": "Medical Emergency Services",
+    "death incident": "Emergency Medical Services",
+    "shooting": "Police Department",
+    "violence": "Law Enforcement",
+    "accident": "Emergency Response Unit"
 }
 
 def determine_dispatch(categories):
@@ -254,7 +300,7 @@ def respondrAI_pipeline(text):
 
     return {
         "emergency": True,
-        "types": detected_categories if detected_categories else ["unknown"],
+        "types": detected_categories if detected_categories else ["general emergency"],
         "severity": severity,
         "confidence": round(confidence, 3),
         "dispatch": dispatch_units,
@@ -266,7 +312,6 @@ def respondrAI_pipeline(text):
 # =============================
 
 st.set_page_config(page_title="RespondrAI Hybrid Agent", page_icon="🚨")
-
 st.title("🚨 RespondrAI - Advanced Hybrid Emergency Agent")
 
 user_input = st.text_area("Enter an incident report or tweet:")
