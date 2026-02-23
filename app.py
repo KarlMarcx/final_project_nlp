@@ -224,6 +224,10 @@ if st.button("Analyze"):
             st.write("Dispatch:", result["dispatch"])
             st.write("Confidence:", result["confidence"])
 
+            st.write("### Reason")
+            for r in result["reason"]:
+                st.write(f"- {r}")
+
             st.write("### Recommended Actions")
             for a in result["actions"]:
                 st.write(f"- {a}")
