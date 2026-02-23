@@ -86,35 +86,35 @@ def rag_retrieve(query, k=3):
 # LLM GENERATION (HUGGINGFACE)
 # =============================
 
-HF_LLM_URL = "https://router.huggingface.co/hf-inference/models/facebook/bart-large-cnn"
+# HF_LLM_URL = "https://router.huggingface.co/hf-inference/models/facebook/bart-large-cnn"
 
-def generate_llm_response(prompt):
-    headers = {
-        "Authorization": f"Bearer {os.getenv('HF_TOKEN')}"
-    }
+# def generate_llm_response(prompt):
+#     headers = {
+#         "Authorization": f"Bearer {os.getenv('HF_TOKEN')}"
+#     }
 
-    payload = {"inputs": prompt}
+#     payload = {"inputs": prompt}
 
-    try:
-        response = requests.post(
-            HF_LLM_URL,
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
+#     try:
+#         response = requests.post(
+#             HF_LLM_URL,
+#             headers=headers,
+#             json=payload,
+#             timeout=30
+#         )
 
-        if response.status_code != 200:
-            return "LLM response unavailable."
+#         if response.status_code != 200:
+#             return "LLM response unavailable."
 
-        result = response.json()
+#         result = response.json()
 
-        if isinstance(result, list) and len(result) > 0:
-            return result[0].get("summary_text", "")
+#         if isinstance(result, list) and len(result) > 0:
+#             return result[0].get("summary_text", "")
 
-        return str(result)
+#         return str(result)
 
-    except Exception:
-        return "LLM response error."
+#     except Exception:
+#         return "LLM response error."
 
 # =============================
 # KEYWORD REASONING
@@ -158,7 +158,7 @@ def classify_incident(text):
     return "unknown"
 
 # =============================
-# PIPELINE (CLASSIFICATION + RAG + LLM)
+# PIPELINE (CLASSIFICATION + RAG)
 # =============================
 
 def respondrAI_pipeline(text):
@@ -185,19 +185,16 @@ def respondrAI_pipeline(text):
         if inferred != "unknown":
             incident_type = inferred
 
-    # LLM explanation using RAG context
-    llm_context = " ".join(rag_docs)
-    llm_explanation = generate_llm_response(
-        f"Explain this emergency situation: {llm_context}"
-    )
-
     return {
         "emergency": True,
         "type": incident_type,
         "urgency": "high",
         "confidence": round(confidence, 3),
+                "reason": [
+            f"Input contains keywords: {keywords}" if keywords else "No direct emergency keywords detected.",
+            "Knowledge base matches documents:"
+        ] + rag_docs,
         "actions": rag_docs,
-        "llm_explanation": llm_explanation,
         "dispatch": "Fire Department" if incident_type == "fire" else "Disaster Response Team"
     }
 
