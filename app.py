@@ -175,7 +175,7 @@ def respondrAI_pipeline(text):
         f"Model classified this as emergency with probability {round(confidence,3)}.",
         f"Detected incident categories: {', '.join(detected_categories) if detected_categories else 'None explicitly detected.'}",
         "Retrieved relevant safety procedures from knowledge base:"
-    ] + rag_docs
+    ]
 
     return {
         "emergency": True,
