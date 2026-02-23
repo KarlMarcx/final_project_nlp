@@ -231,5 +231,5 @@ if st.button("Analyze"):
             for a in result["actions"]:
                 st.write(f"- {a}")
 
-            st.write("### AI Explanation (LLM)")
-            st.write(result["llm_explanation"])
+            # st.write("### AI Explanation (LLM)")
+            # st.write(result["llm_explanation"])
