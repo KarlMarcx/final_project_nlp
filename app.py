@@ -15,7 +15,7 @@ THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # =============================
-# LOAD CLASSIFICATION MODEL
+# LOAD BINARY CLASSIFIER (UNCHANGED)
 # =============================
 
 @st.cache_resource
@@ -55,53 +55,137 @@ def clean_text(text):
     return text.strip()
 
 # =============================
-# KNOWLEDGE BASE (RAG)
+# SEMANTIC INCIDENT CLASSIFIER
 # =============================
-
-DOCS = [
-    "Fire emergencies require immediate evacuation and contacting the fire department.",
-    "Do not use elevators during a fire.",
-    "Stay low to avoid smoke inhalation.",
-    "Earthquakes require drop, cover, and hold.",
-    "After an earthquake, check for structural damage before reentering buildings.",
-    "Flood areas require moving to higher ground and avoiding floodwaters.",
-    "Explosions may cause structural damage and secondary hazards.",
-    "Call emergency services immediately if anyone is injured."
-]
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-def build_faiss_index(docs):
-    embeddings = embedder.encode(docs)
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings))
-    return index
+DISASTER_CATEGORIES = [
+    "fire",
+    "flood",
+    "earthquake",
+    "storm",
+    "tornado",
+    "tsunami",
+    "landslide",
+    "volcano",
+    "explosion",
+    "collapse",
+    "drought",
+    "pandemic",
+    "shooting",
+    "chemical spill"
+]
 
-index = build_faiss_index(DOCS)
+category_embeddings = embedder.encode(
+    DISASTER_CATEGORIES,
+    normalize_embeddings=True
+)
 
-def rag_retrieve(query, k=3):
-    query_embedding = embedder.encode([query])
-    distances, indices = index.search(np.array(query_embedding), k)
-    return [DOCS[i] for i in indices[0]]
+def detect_incidents_semantic(text, threshold=0.40, top_k=2):
+    query_embedding = embedder.encode(
+        [text],
+        normalize_embeddings=True
+    )
+
+    similarities = np.dot(category_embeddings, query_embedding.T).squeeze()
+    top_indices = similarities.argsort()[-top_k:][::-1]
+
+    detected = []
+    for idx in top_indices:
+        if similarities[idx] >= threshold:
+            detected.append(DISASTER_CATEGORIES[idx])
+
+    return detected
 
 # =============================
-# KEYWORD LOGIC (MULTI-DISASTER)
+# STRONG CATEGORY-BASED RAG
 # =============================
 
-EMERGENCY_KEYWORDS = {
-    "fire": ["fire", "burning", "flames", "smoke", "inferno"],
-    "flood": ["flood", "flooded", "rising water", "submerged"],
-    "earthquake": ["earthquake", "tremor", "shake", "aftershock"],
-    "explosion": ["explosion", "blast", "detonation", "boom"],
-    "injury": ["injured", "bleeding", "unconscious", "wounded"]
+KNOWLEDGE_BASE = {
+    "fire": [
+        "Evacuate immediately and call the fire department.",
+        "Do not use elevators during a fire.",
+        "Stay low to avoid smoke inhalation.",
+        "Use fire extinguishers only if trained.",
+        "Check doors for heat before opening."
+    ],
+    "flood": [
+        "Move to higher ground immediately.",
+        "Avoid walking or driving through floodwaters.",
+        "Turn off electricity if safe to do so.",
+        "Prepare emergency supplies and clean water.",
+        "Follow local evacuation advisories."
+    ],
+    "earthquake": [
+        "Drop, cover, and hold on.",
+        "Stay away from windows and heavy objects.",
+        "After shaking stops, check for injuries.",
+        "Do not reenter damaged buildings.",
+        "Expect aftershocks."
+    ],
+    "storm": [
+        "Stay indoors and away from windows.",
+        "Secure outdoor objects.",
+        "Monitor official weather updates.",
+        "Prepare emergency kit.",
+        "Avoid flooded roads."
+    ],
+    "explosion": [
+        "Move away from the blast area immediately.",
+        "Check for secondary hazards.",
+        "Assist injured if safe.",
+        "Avoid unstable structures.",
+        "Contact emergency responders."
+    ],
+    "collapse": [
+        "Evacuate unstable structures immediately.",
+        "Avoid entering damaged buildings.",
+        "Call search and rescue teams.",
+        "Watch for falling debris.",
+        "Check for trapped individuals."
+    ],
+    "pandemic": [
+        "Follow public health guidelines.",
+        "Wear protective masks if required.",
+        "Practice social distancing.",
+        "Wash hands frequently.",
+        "Seek medical advice if symptomatic."
+    ]
 }
 
-def detect_incidents(text):
-    detected = []
-    for category, words in EMERGENCY_KEYWORDS.items():
-        if any(word in text for word in words):
-            detected.append(category)
-    return detected
+# Build FAISS index per category using cosine similarity
+faiss_indices = {}
+
+for category, docs in KNOWLEDGE_BASE.items():
+    embeddings = embedder.encode(
+        docs,
+        normalize_embeddings=True
+    )
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatIP(dim)  # Inner product = cosine (normalized)
+    index.add(np.array(embeddings))
+    faiss_indices[category] = (index, docs)
+
+def rag_retrieve(query, categories, k=3):
+    query_embedding = embedder.encode(
+        [query],
+        normalize_embeddings=True
+    )
+
+    results = []
+
+    for category in categories:
+        if category in faiss_indices:
+            index, docs = faiss_indices[category]
+            distances, indices = index.search(
+                np.array(query_embedding),
+                min(k, len(docs))
+            )
+            for i in indices[0]:
+                results.append(docs[i])
+
+    return list(set(results))  # remove duplicates
 
 # =============================
 # SEVERITY SCORING
@@ -110,14 +194,9 @@ def detect_incidents(text):
 def calculate_severity(confidence, detected_categories):
 
     score = 0
-
-    # Model confidence weight
     score += confidence * 2
-
-    # Multiple disasters increase severity
     score += len(detected_categories)
 
-    # Injury increases severity heavily
     if "injury" in detected_categories:
         score += 2
 
@@ -138,8 +217,10 @@ DISPATCH_MAP = {
     "fire": "Fire Department",
     "flood": "Flood Rescue Unit",
     "earthquake": "Search and Rescue Team",
+    "storm": "Disaster Response Unit",
     "explosion": "Bomb Disposal Unit",
-    "injury": "Medical Emergency Services"
+    "collapse": "Urban Search and Rescue",
+    "pandemic": "Public Health Emergency Unit"
 }
 
 def determine_dispatch(categories):
@@ -165,17 +246,11 @@ def respondrAI_pipeline(text):
             "message": "No emergency detected."
         }
 
-    detected_categories = detect_incidents(cleaned)
-    rag_docs = rag_retrieve(cleaned)
+    detected_categories = detect_incidents_semantic(cleaned)
+    rag_docs = rag_retrieve(cleaned, detected_categories)
 
     severity = calculate_severity(confidence, detected_categories)
     dispatch_units = determine_dispatch(detected_categories)
-
-    reasons = [
-        f"Model classified this as emergency with probability {round(confidence,3)}.",
-        f"Detected incident categories: {', '.join(detected_categories) if detected_categories else 'None explicitly detected.'}",
-        "Retrieved relevant safety procedures from knowledge base:"
-    ]
 
     return {
         "emergency": True,
@@ -183,7 +258,6 @@ def respondrAI_pipeline(text):
         "severity": severity,
         "confidence": round(confidence, 3),
         "dispatch": dispatch_units,
-        "reason": reasons,
         "actions": rag_docs
     }
 
@@ -222,10 +296,6 @@ if st.button("Analyze"):
             st.write("### Confidence Score")
             st.progress(result["confidence"])
             st.write(f"{result['confidence'] * 100:.1f}%")
-
-            st.write("### Reasoning")
-            for r in result["reason"]:
-                st.write("-", r)
 
             st.write("### Recommended Actions")
             for a in result["actions"]:
