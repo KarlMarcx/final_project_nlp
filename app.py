@@ -3,30 +3,20 @@ import torch
 import re
 import faiss
 import numpy as np
-import requests
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-# =====================================================
-# CONFIG
-# =====================================================
+# =============================
+# CONFIGURATION
+# =============================
 
 MODEL_PATH = "Karyl-Maxine/disaster-distilroberta"
 THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Hugging Face API (from Streamlit Cloud secrets)
-HF_TOKEN = st.secrets["HF_TOKEN"]
-
-LLM_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
-
-headers = {
-    "Authorization": f"Bearer {HF_TOKEN}"
-}
-
-# =====================================================
-# LOAD CLASSIFIER MODEL
-# =====================================================
+# =============================
+# LOAD CLASSIFICATION MODEL
+# =============================
 
 @st.cache_resource
 def load_model():
@@ -54,9 +44,9 @@ def predict_emergency(text):
 
     return positive_prob > THRESHOLD, positive_prob
 
-# =====================================================
-# CLEAN TEXT
-# =====================================================
+# =============================
+# TEXT CLEANING
+# =============================
 
 def clean_text(text):
     text = text.lower()
@@ -64,21 +54,46 @@ def clean_text(text):
     text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text.strip()
 
-# =====================================================
-# DISASTER CATEGORIES (Expanded)
-# =====================================================
+# =============================
+# KNOWLEDGE BASE (RAG)
+# =============================
+
+DOCS = [
+    "Fire emergencies require immediate evacuation and contacting the fire department.",
+    "Do not use elevators during a fire.",
+    "Stay low to avoid smoke inhalation.",
+    "Earthquakes require drop, cover, and hold.",
+    "After an earthquake, check for structural damage before reentering buildings.",
+    "Flood areas require moving to higher ground and avoiding floodwaters.",
+    "Explosions may cause structural damage and secondary hazards.",
+    "Call emergency services immediately if anyone is injured."
+]
+
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+
+def build_faiss_index(docs):
+    embeddings = embedder.encode(docs)
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(np.array(embeddings))
+    return index
+
+index = build_faiss_index(DOCS)
+
+def rag_retrieve(query, k=3):
+    query_embedding = embedder.encode([query])
+    distances, indices = index.search(np.array(query_embedding), k)
+    return [DOCS[i] for i in indices[0]]
+
+# =============================
+# KEYWORD LOGIC (MULTI-DISASTER)
+# =============================
 
 EMERGENCY_KEYWORDS = {
-    "fire": ["fire", "wildfire", "burning", "flames"],
-    "flood": ["flood", "flooded", "flash flood"],
-    "earthquake": ["earthquake", "tremor", "aftershock"],
-    "storm": ["storm", "typhoon", "hurricane", "cyclone"],
-    "landslide": ["landslide", "mudslide"],
-    "tsunami": ["tsunami"],
-    "explosion": ["explosion", "blast", "bomb"],
-    "collapse": ["collapse", "collapsed", "building collapse"],
-    "accident": ["accident", "crash", "collision"],
-    "injury": ["injured", "bleeding", "unconscious", "casualties"]
+    "fire": ["fire", "burning", "flames", "smoke", "inferno"],
+    "flood": ["flood", "flooded", "rising water", "submerged"],
+    "earthquake": ["earthquake", "tremor", "shake", "aftershock"],
+    "explosion": ["explosion", "blast", "detonation", "boom"],
+    "injury": ["injured", "bleeding", "unconscious", "wounded"]
 }
 
 def detect_incidents(text):
@@ -88,15 +103,22 @@ def detect_incidents(text):
             detected.append(category)
     return detected
 
-# =====================================================
-# SEVERITY + DISPATCH
-# =====================================================
+# =============================
+# SEVERITY SCORING
+# =============================
 
-def calculate_severity(confidence, categories):
-    score = confidence * 2
-    score += len(categories)
+def calculate_severity(confidence, detected_categories):
 
-    if "injury" in categories:
+    score = 0
+
+    # Model confidence weight
+    score += confidence * 2
+
+    # Multiple disasters increase severity
+    score += len(detected_categories)
+
+    # Injury increases severity heavily
+    if "injury" in detected_categories:
         score += 2
 
     if score >= 5:
@@ -108,16 +130,15 @@ def calculate_severity(confidence, categories):
     else:
         return "Low"
 
+# =============================
+# DISPATCH LOGIC
+# =============================
+
 DISPATCH_MAP = {
     "fire": "Fire Department",
     "flood": "Flood Rescue Unit",
     "earthquake": "Search and Rescue Team",
-    "storm": "Disaster Response Team",
-    "landslide": "Geological Response Unit",
-    "tsunami": "Coastal Emergency Unit",
     "explosion": "Bomb Disposal Unit",
-    "collapse": "Urban Search and Rescue",
-    "accident": "Traffic Emergency Unit",
     "injury": "Medical Emergency Services"
 }
 
@@ -128,160 +149,84 @@ def determine_dispatch(categories):
             units.add(DISPATCH_MAP[cat])
     return list(units) if units else ["Disaster Response Team"]
 
-# =====================================================
-# RAG KNOWLEDGE BASE
-# =====================================================
+# =============================
+# MAIN PIPELINE
+# =============================
 
-DOCS = [
-    "Evacuate immediately if there is visible fire.",
-    "Stay low to avoid smoke inhalation.",
-    "Move to higher ground during floods.",
-    "Drop, cover, and hold during earthquakes.",
-    "Avoid unstable structures after a collapse.",
-    "Do not approach explosive devices.",
-    "Check for injuries and apply first aid if trained.",
-    "Stay away from landslide-prone slopes.",
-    "Avoid driving through flooded roads.",
-    "Monitor official disaster announcements."
-]
+def respondrAI_pipeline(text):
 
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
-
-@st.cache_resource
-def build_index(docs):
-    embeddings = embedder.encode(docs)
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings))
-    return index
-
-index = build_index(DOCS)
-
-def rag_retrieve(query, k=3):
-    query_embedding = embedder.encode([query])
-    distances, indices = index.search(np.array(query_embedding), k)
-    return [DOCS[i] for i in indices[0]]
-
-# =====================================================
-# LLM GENERATION (HF API)
-# =====================================================
-
-def query_llm(prompt):
-
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 250,
-            "temperature": 0.6,
-            "return_full_text": False
-        }
-    }
-
-    try:
-        response = requests.post(
-            LLM_API_URL,
-            headers=headers,
-            json=payload,
-            timeout=60
-        )
-
-        if response.status_code != 200:
-            return "⚠️ LLM is currently loading or rate-limited. Please try again."
-
-        return response.json()[0]["generated_text"]
-
-    except requests.exceptions.RequestException:
-        return "⚠️ Unable to connect to LLM service."
-
-# =====================================================
-# AGENTIC PIPELINE
-# =====================================================
-
-def process_message(user_input):
-
-    state = st.session_state.incident_state
-
-    cleaned = clean_text(user_input)
+    cleaned = clean_text(text)
     is_emergency, confidence = predict_emergency(cleaned)
 
     if not is_emergency:
-        return "No emergency detected. Please provide more details if this is urgent."
+        return {
+            "emergency": False,
+            "confidence": round(confidence, 3),
+            "message": "No emergency detected."
+        }
 
-    detected = detect_incidents(cleaned)
-
-    state["confidence"] = max(state["confidence"], confidence)
-    state["categories"] = list(set(state["categories"] + detected))
-
-    severity = calculate_severity(state["confidence"], state["categories"])
-    dispatch = determine_dispatch(state["categories"])
-
+    detected_categories = detect_incidents(cleaned)
     rag_docs = rag_retrieve(cleaned)
-    context = "\n".join(rag_docs)
 
-    prompt = f"""
-You are an intelligent emergency response AI.
+    severity = calculate_severity(confidence, detected_categories)
+    dispatch_units = determine_dispatch(detected_categories)
 
-Incident Description:
-{user_input}
+    reasons = [
+        f"Model classified this as emergency with probability {round(confidence,3)}.",
+        f"Detected incident categories: {', '.join(detected_categories) if detected_categories else 'None explicitly detected.'}",
+        "Retrieved relevant safety procedures from knowledge base:"
+    ] + rag_docs
 
-Detected Disaster Types:
-{', '.join(state['categories'])}
-
-Severity Level:
-{severity}
-
-Relevant Safety Guidelines:
-{context}
-
-Generate:
-1. Step-by-step emergency instructions.
-2. Immediate life-saving actions.
-3. Safety precautions.
-4. A short reassuring message.
-"""
-
-    generated_advice = query_llm(prompt)
-
-    return f"""
-🚨 Emergency Confirmed
-
-Incident Types: {', '.join(state['categories'])}
-Severity Level: {severity}
-Dispatch Units: {', '.join(dispatch)}
-Confidence: {round(state['confidence'],3)}
-
-{generated_advice}
-"""
-
-# =====================================================
-# STREAMLIT UI
-# =====================================================
-
-st.set_page_config(page_title="Agentic RespondrAI", page_icon="🚨")
-st.title("🚨 Agentic Conversational Emergency Response AI")
-
-if "incident_state" not in st.session_state:
-    st.session_state.incident_state = {
-        "confidence": 0.0,
-        "categories": []
+    return {
+        "emergency": True,
+        "types": detected_categories if detected_categories else ["unknown"],
+        "severity": severity,
+        "confidence": round(confidence, 3),
+        "dispatch": dispatch_units,
+        "reason": reasons,
+        "actions": rag_docs
     }
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# =============================
+# STREAMLIT UI
+# =============================
 
-user_input = st.text_input("Describe the situation:")
+st.set_page_config(page_title="RespondrAI Hybrid Agent", page_icon="🚨")
 
-if st.button("Send"):
-    if user_input:
-        st.session_state.chat_history.append(("User", user_input))
-        response = process_message(user_input)
-        st.session_state.chat_history.append(("Agent", response))
+st.title("🚨 RespondrAI - Advanced Hybrid Emergency Agent")
 
-for speaker, message in st.session_state.chat_history:
-    if speaker == "User":
-        st.markdown(f"**You:** {message}")
+user_input = st.text_area("Enter an incident report or tweet:")
+
+if st.button("Analyze"):
+    if not user_input.strip():
+        st.warning("Please enter text.")
     else:
-        st.markdown(f"**Agent:** {message}")
+        result = respondrAI_pipeline(user_input)
 
-if st.session_state.incident_state["confidence"] > 0:
-    st.write("### Current Confidence Level")
-    st.progress(st.session_state.incident_state["confidence"])
+        if not result["emergency"]:
+            st.success(result["message"])
+            st.write("Confidence:", result["confidence"])
+        else:
+            st.error("🚨 Emergency Detected!")
+
+            st.write("### Incident Types")
+            st.write(", ".join(result["types"]))
+
+            st.write("### Severity Level")
+            st.write(result["severity"])
+
+            st.write("### Dispatch Units")
+            for unit in result["dispatch"]:
+                st.write("-", unit)
+
+            st.write("### Confidence Score")
+            st.progress(result["confidence"])
+            st.write(f"{result['confidence'] * 100:.1f}%")
+
+            st.write("### Reasoning")
+            for r in result["reason"]:
+                st.write("-", r)
+
+            st.write("### Recommended Actions")
+            for a in result["actions"]:
+                st.write("-", a)
