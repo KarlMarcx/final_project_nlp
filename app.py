@@ -408,19 +408,15 @@ def predict_emergency(text):
 
 @st.cache_resource
 def load_generator():
-    gen_model = AutoModelForSeq2SeqLM.from_pretrained(GEN_MODEL_NAME)
-    gen_tokenizer = AutoTokenizer.from_pretrained(GEN_MODEL_NAME)
+    model = AutoModelForSeq2SeqLM.from_pretrained(GEN_MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(GEN_MODEL_NAME)
 
-    generator = pipeline(
-        "text2text-generation",
-        model=gen_model,
-        tokenizer=gen_tokenizer,
-        device=0 if torch.cuda.is_available() else -1
-    )
+    model.to(device)
+    model.eval()
 
-    return generator
+    return model, tokenizer
 
-generator = load_generator()
+gen_model, gen_tokenizer = load_generator()
 
 
 # =============================
@@ -646,14 +642,23 @@ Response:
 
 
 def generate_rag_response(prompt):
-    output = generator(
-        prompt,
-        max_length=512,
-        do_sample=True,
-        temperature=0.7
-    )
-    return output[0]["generated_text"]
 
+    inputs = gen_tokenizer(
+        prompt,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512
+    ).to(device)
+
+    with torch.no_grad():
+        outputs = gen_model.generate(
+            **inputs,
+            max_length=512,
+            temperature=0.7,
+            do_sample=True
+        )
+
+    return gen_tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 # =============================
 # MAIN PIPELINE
