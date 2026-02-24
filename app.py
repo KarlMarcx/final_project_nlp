@@ -353,26 +353,19 @@ import faiss
 import numpy as np
 
 from sentence_transformers import SentenceTransformer
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    AutoModelForSeq2SeqLM
-)
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForSeq2SeqLM
 
-# =========================================================
-# CONFIGURATION
-# =========================================================
-
+# ===========================
+# CONFIG
+# ===========================
 CLASSIFIER_MODEL = "Karyl-Maxine/disaster-distilroberta"
 GEN_MODEL = "google/flan-t5-base"
 THRESHOLD = 0.65
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# =========================================================
-# LOAD CLASSIFIER
-# =========================================================
-
+# ===========================
+# LOAD MODELS
+# ===========================
 @st.cache_resource
 def load_classifier():
     model = AutoModelForSequenceClassification.from_pretrained(CLASSIFIER_MODEL)
@@ -383,25 +376,15 @@ def load_classifier():
 
 classifier_model, classifier_tokenizer = load_classifier()
 
-def predict_emergency(text):
-    inputs = classifier_tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=True,
-        padding=True,
-        max_length=128
-    ).to(device)
 
+def predict_emergency(text):
+    inputs = classifier_tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=128).to(device)
     with torch.no_grad():
         outputs = classifier_model(**inputs)
         probs = torch.softmax(outputs.logits, dim=1)
         score = probs[:, 1].item()
-
     return score > THRESHOLD, score
 
-# =========================================================
-# LOAD GENERATOR
-# =========================================================
 
 @st.cache_resource
 def load_generator():
@@ -413,46 +396,34 @@ def load_generator():
 
 gen_model, gen_tokenizer = load_generator()
 
-def generate_response(prompt):
-    """Generates structured JSON response deterministically."""
-    inputs = gen_tokenizer(
-        prompt,
-        return_tensors="pt",
-        truncation=True,
-        max_length=512
-    ).to(device)
 
+def generate_response(prompt):
+    inputs = gen_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
     with torch.no_grad():
         outputs = gen_model.generate(
             **inputs,
             max_new_tokens=300,
-            do_sample=False,          # deterministic
-            temperature=0.0,          # follow prompt exactly
-            eos_token_id=gen_tokenizer.eos_token_id
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9
         )
-
     decoded = gen_tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    # Remove prompt echo
-    if prompt in decoded:
-        decoded = decoded.replace(prompt, "")
-
     return decoded.strip()
 
-# =========================================================
-# TEXT CLEANING
-# =========================================================
 
+# ===========================
+# CLEAN TEXT
+# ===========================
 def clean_text(text):
-    # remove URLs, preserve punctuation and numbers for better RAG/classifier
+    text = text.lower()
     text = re.sub(r"http\S+", "", text)
-    text = re.sub(r"[^a-zA-Z0-9\s,.-]", "", text)
+    text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text.strip()
 
-# =========================================================
-# SEMANTIC + KEYWORD HYBRID DETECTION
-# =========================================================
 
+# ===========================
+# CATEGORY DETECTION
+# ===========================
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 EMERGENCY_CATEGORIES = [
@@ -461,10 +432,8 @@ EMERGENCY_CATEGORIES = [
     "death incident", "accident"
 ]
 
-category_embeddings = embedder.encode(
-    EMERGENCY_CATEGORIES,
-    normalize_embeddings=True
-)
+category_embeddings = embedder.encode(EMERGENCY_CATEGORIES, normalize_embeddings=True)
+
 
 def detect_categories(text, threshold=0.30, top_k=3):
     query_embedding = embedder.encode([text], normalize_embeddings=True)
@@ -497,43 +466,22 @@ def detect_categories(text, threshold=0.30, top_k=3):
 
     return list(set(detected))
 
-# =========================================================
-# KNOWLEDGE BASE
-# =========================================================
 
+# ===========================
+# KNOWLEDGE BASE
+# ===========================
 KNOWLEDGE_BASE = {
-    "fire": [
-        "Evacuate immediately.",
-        "Do not use elevators.",
-        "Stay low to avoid smoke."
-    ],
-    "violence": [
-        "Move to a secure location.",
-        "Avoid confrontation.",
-        "Contact law enforcement immediately."
-    ],
-    "accident": [
-        "Ensure scene safety.",
-        "Call emergency responders.",
-        "Do not move severely injured individuals."
-    ],
-    "medical emergency": [
-        "Call medical services immediately.",
-        "Check breathing and pulse.",
-        "Provide first aid if trained."
-    ]
+    "fire": ["Evacuate immediately.", "Do not use elevators.", "Stay low to avoid smoke."],
+    "violence": ["Move to a secure location.", "Avoid confrontation.", "Contact law enforcement immediately."],
+    "accident": ["Ensure scene safety.", "Call emergency responders.", "Do not move severely injured individuals."],
+    "medical emergency": ["Call medical services immediately.", "Check breathing and pulse.", "Provide first aid if trained."]
 }
 
-GENERAL_DOCS = [
-    "Ensure your own safety first.",
-    "Call emergency services immediately.",
-    "Assist others only if safe."
-]
+GENERAL_DOCS = ["Ensure your own safety first.", "Call emergency services immediately.", "Assist others only if safe."]
 
-# =========================================================
+# ===========================
 # BUILD FAISS INDEX
-# =========================================================
-
+# ===========================
 faiss_indices = {}
 for category, docs in KNOWLEDGE_BASE.items():
     embeddings = embedder.encode(docs, normalize_embeddings=True)
@@ -543,61 +491,46 @@ for category, docs in KNOWLEDGE_BASE.items():
     faiss_indices[category] = (index, docs)
 
 general_embeddings = embedder.encode(GENERAL_DOCS, normalize_embeddings=True)
-dim = general_embeddings.shape[1]
-general_index = faiss.IndexFlatIP(dim)
+general_index = faiss.IndexFlatIP(general_embeddings.shape[1])
 general_index.add(np.array(general_embeddings))
+
 
 def rag_retrieve(query, categories, k=2):
     query_embedding = embedder.encode([query], normalize_embeddings=True)
     results = []
-
     for category in categories:
         if category in faiss_indices:
             index, docs = faiss_indices[category]
             distances, indices = index.search(np.array(query_embedding), min(k, len(docs)))
             for i in indices[0]:
                 results.append(docs[i])
-
     if not results:
         distances, indices = general_index.search(np.array(query_embedding), min(k, len(GENERAL_DOCS)))
         results = [GENERAL_DOCS[i] for i in indices[0]]
-
     return list(set(results))
 
-# =========================================================
-# SEVERITY LOGIC
-# =========================================================
 
+# ===========================
+# SEVERITY
+# ===========================
 def calculate_severity(confidence, categories):
     score = confidence * 2 + len(categories)
+    if "death incident" in categories: score += 3
+    if "violence" in categories: score += 2
+    if "fire" in categories: score += 2
+    if "medical emergency" in categories: score += 1.5
+    if score >= 6: return "Critical"
+    elif score >= 4: return "High"
+    elif score >= 3: return "Moderate"
+    else: return "Low"
 
-    if "death incident" in categories:
-        score += 3
-    if "violence" in categories:
-        score += 2
-    if "fire" in categories:
-        score += 2
-    if "medical emergency" in categories:
-        score += 1.5
 
-    if score >= 6:
-        return "Critical"
-    elif score >= 4:
-        return "High"
-    elif score >= 3:
-        return "Moderate"
-    else:
-        return "Low"
-
-# =========================================================
-# PROMPT BUILDER (JSON-structured)
-# =========================================================
-
+# ===========================
+# PROMPT BUILDER (NO ROLE AT TOP)
+# ===========================
 def build_prompt(user_text, docs, categories, severity):
     context = "\n".join([f"- {d}" for d in docs])
     return f"""
-Analyze the emergency incident below and write a structured JSON response.
-
 Incident:
 {user_text}
 
@@ -607,40 +540,32 @@ Severity Level: {severity}
 Safety Guidelines:
 {context}
 
-Provide the response EXACTLY in this JSON format:
-{{
-"Situation Summary": "...",
-"Risk Level": "...",
-"Immediate Actions": "...",
-"Recommended Authorities": "...",
-"Safety Advice": "..."
-}}
+Write the emergency report in this structure:
 
-Only fill in the fields. Do not include extra text.
+Situation Summary:
+Risk Level:
+Immediate Actions:
+Recommended Authorities:
+Safety Advice:
+
+Start writing below:
 """
 
-# =========================================================
-# MAIN PIPELINE
-# =========================================================
 
+# ===========================
+# PIPELINE
+# ===========================
 def respondrAI_pipeline(text):
     cleaned = clean_text(text)
     is_emergency, confidence = predict_emergency(cleaned)
-
     if not is_emergency:
-        return {
-            "emergency": False,
-            "confidence": round(confidence, 3),
-            "message": "No emergency detected."
-        }
+        return {"emergency": False, "confidence": round(confidence, 3), "message": "No emergency detected."}
 
     categories = detect_categories(cleaned)
     docs = rag_retrieve(cleaned, categories)
     severity = calculate_severity(confidence, categories)
-
     prompt = build_prompt(text, docs, categories, severity)
     report = generate_response(prompt)
-
     return {
         "emergency": True,
         "types": categories if categories else ["general emergency"],
@@ -650,10 +575,10 @@ def respondrAI_pipeline(text):
         "report": report
     }
 
-# =========================================================
-# STREAMLIT UI
-# =========================================================
 
+# ===========================
+# STREAMLIT UI
+# ===========================
 st.set_page_config(page_title="RespondrAI Generative RAG", page_icon="🚨")
 st.title("🚨 RespondrAI - Robust Generative RAG Emergency Agent")
 
@@ -664,26 +589,19 @@ if st.button("Analyze"):
         st.warning("Please enter text.")
     else:
         result = respondrAI_pipeline(user_input)
-
         if not result["emergency"]:
             st.success(result["message"])
-            st.write("Confidence:", f"{result['confidence']*100:.1f}%")
+            st.write("Confidence:", result["confidence"])
         else:
             st.error("🚨 Emergency Detected!")
-
             st.write("### Incident Types")
             st.write(", ".join(result["types"]))
-
             st.write("### Severity")
             st.write(result["severity"])
-
             st.write("### Confidence")
             st.progress(result["confidence"])
-            st.write(f"{result['confidence']*100:.1f}% confidence")
-
             st.write("### Retrieved Knowledge")
             for doc in result["retrieved"]:
                 st.write("-", doc)
-
             st.write("### 🤖 AI Generated Report")
-            st.json(result["report"])
+            st.write(result["report"])
