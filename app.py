@@ -736,5 +736,5 @@ if st.button("Analyze"):
             for a in result["actions"]:
                 st.write("-", a)
 
-            st.write("### 🤖 AI Generated Emergency Report")
+            st.write("### AI Generated Emergency Report")
             st.write(result["generated_report"])
