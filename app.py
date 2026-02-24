@@ -383,7 +383,6 @@ def load_classifier():
 
 classifier_model, classifier_tokenizer = load_classifier()
 
-
 def predict_emergency(text):
     inputs = classifier_tokenizer(
         text,
@@ -402,7 +401,7 @@ def predict_emergency(text):
 
 
 # =========================================================
-# LOAD GENERATIVE MODEL (CLOUD SAFE)
+# LOAD GENERATOR (FIXED)
 # =========================================================
 
 @st.cache_resource
@@ -428,12 +427,19 @@ def generate_response(prompt):
     with torch.no_grad():
         outputs = gen_model.generate(
             **inputs,
-            max_length=512,
-            temperature=0.3,        # lower = more stable
-            do_sample=False         # deterministic for demo reliability
+            max_new_tokens=300,     # ✅ important fix
+            do_sample=True,         # prevents copying prompt
+            temperature=0.7,
+            top_p=0.9
         )
 
-    return gen_tokenizer.decode(outputs[0], skip_special_tokens=True)
+    decoded = gen_tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    # Remove prompt echo if model repeats it
+    if "Incident:" in decoded:
+        decoded = decoded.split("Begin writing the response below:")[-1]
+
+    return decoded.strip()
 
 
 # =========================================================
@@ -448,23 +454,21 @@ def clean_text(text):
 
 
 # =========================================================
-# SEMANTIC CATEGORY DETECTION (HYBRID)
+# SEMANTIC + KEYWORD HYBRID DETECTION
 # =========================================================
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 EMERGENCY_CATEGORIES = [
-    "fire", "flood", "earthquake", "storm", "tornado",
-    "tsunami", "landslide", "explosion", "collapse",
+    "fire", "flood", "earthquake", "storm",
     "shooting", "violence", "medical emergency",
-    "death incident", "accident", "chemical spill"
+    "death incident", "accident"
 ]
 
 category_embeddings = embedder.encode(
     EMERGENCY_CATEGORIES,
     normalize_embeddings=True
 )
-
 
 def detect_categories(text, threshold=0.30, top_k=3):
 
@@ -478,8 +482,7 @@ def detect_categories(text, threshold=0.30, top_k=3):
         if similarities[idx] >= threshold:
             detected.append(EMERGENCY_CATEGORIES[idx])
 
-    # 🔥 Keyword safety net
-    text_lower = text.lower()
+    # Keyword safety net
     keyword_map = {
         "fire": "fire",
         "burn": "fire",
@@ -493,6 +496,7 @@ def detect_categories(text, threshold=0.30, top_k=3):
         "shoot": "shooting"
     }
 
+    text_lower = text.lower()
     for key, value in keyword_map.items():
         if key in text_lower:
             detected.append(value)
@@ -521,7 +525,7 @@ KNOWLEDGE_BASE = {
         "Do not move severely injured individuals."
     ],
     "medical emergency": [
-        "Call medical services.",
+        "Call medical services immediately.",
         "Check breathing and pulse.",
         "Provide first aid if trained."
     ]
@@ -533,8 +537,9 @@ GENERAL_DOCS = [
     "Assist others only if safe."
 ]
 
+
 # =========================================================
-# BUILD FAISS INDICES
+# BUILD FAISS INDEX
 # =========================================================
 
 faiss_indices = {}
@@ -578,7 +583,7 @@ def rag_retrieve(query, categories, k=2):
 
 
 # =========================================================
-# SEVERITY LOGIC (WEIGHTED)
+# SEVERITY LOGIC
 # =========================================================
 
 def calculate_severity(confidence, categories):
@@ -605,7 +610,7 @@ def calculate_severity(confidence, categories):
 
 
 # =========================================================
-# PROMPT BUILDER
+# PROMPT BUILDER (FIXED)
 # =========================================================
 
 def build_prompt(user_text, docs, categories, severity):
@@ -613,24 +618,26 @@ def build_prompt(user_text, docs, categories, severity):
     context = "\n".join([f"- {d}" for d in docs])
 
     return f"""
-You are an emergency response expert.
+Analyze the emergency incident below and write a structured response.
 
 Incident:
 {user_text}
 
 Detected Types: {', '.join(categories)}
-Severity: {severity}
+Severity Level: {severity}
 
-Guidelines:
+Safety Guidelines:
 {context}
 
-Write a clear structured emergency report:
+Provide the response using this exact structure:
 
 Situation Summary:
 Risk Level:
 Immediate Actions:
 Recommended Authorities:
 Safety Advice:
+
+Begin writing the response below:
 """
 
 
