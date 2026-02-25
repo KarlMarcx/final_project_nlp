@@ -359,7 +359,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, Auto
 # CONFIG
 # ===========================
 CLASSIFIER_MODEL = "Karyl-Maxine/disaster-distilroberta"
-GEN_MODEL = "google/flan-t5-base"
+GEN_MODEL = "google/flan-t5-large"
 THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
