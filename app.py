@@ -401,12 +401,12 @@ def generate_response(prompt):
     inputs = gen_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
     with torch.no_grad():
         outputs = gen_model.generate(
-            **inputs,
-            max_new_tokens=300,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9
-        )
+    **inputs,
+    max_new_tokens=300,
+    do_sample=False,   # <- deterministic
+    num_beams=4,       # <- better structure
+    early_stopping=True
+)
     decoded = gen_tokenizer.decode(outputs[0], skip_special_tokens=True)
     return decoded.strip()
 
@@ -530,7 +530,12 @@ def calculate_severity(confidence, categories):
 # ===========================
 def build_prompt(user_text, docs, categories, severity):
     context = "\n".join([f"- {d}" for d in docs])
+
     return f"""
+You are an emergency response expert.
+
+Based on the incident below, generate a complete emergency response report.
+
 Incident:
 {user_text}
 
@@ -540,17 +545,16 @@ Severity Level: {severity}
 Safety Guidelines:
 {context}
 
-Write the emergency report in this structure:
+Write a detailed emergency report with the following sections:
 
-Situation Summary:
-Risk Level:
-Immediate Actions:
-Recommended Authorities:
-Safety Advice:
+Situation Summary
+Risk Level
+Immediate Actions
+Recommended Authorities
+Safety Advice
 
-Start writing below:
+Provide full sentences under each section.
 """
-
 
 # ===========================
 # PIPELINE
