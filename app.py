@@ -398,16 +398,23 @@ gen_model, gen_tokenizer = load_generator()
 
 
 def generate_response(prompt):
-    inputs = gen_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
+    inputs = gen_tokenizer(
+        prompt,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512
+    ).to(device)
+
     with torch.no_grad():
         outputs = gen_model.generate(
-    **inputs,
-    max_new_tokens=200,
-    do_sample=False,   # <- deterministic
-    num_beams=5, 
-    repetition_penalty=1.2, 
-    early_stopping=True
-)
+            **inputs,
+            max_new_tokens=300,
+            do_sample=True,        # <- turn sampling back on
+            temperature=0.3,       # <- low randomness
+            top_p=0.9,
+            repetition_penalty=1.2
+        )
+
     decoded = gen_tokenizer.decode(outputs[0], skip_special_tokens=True)
     return decoded.strip()
 
@@ -530,10 +537,10 @@ def calculate_severity(confidence, categories):
 # PROMPT BUILDER (NO ROLE AT TOP)
 # ===========================
 def build_prompt(user_text, docs, categories, severity):
-    context = "\n".join([f"- {d}" for d in docs])
+    context = " ".join(docs)
 
     return f"""
-You are an emergency response expert.
+Task: Generate a structured emergency response report.
 
 Incident:
 {user_text}
@@ -544,13 +551,12 @@ Severity Level: {severity}
 Safety Guidelines:
 {context}
 
-Complete the following emergency report:
-
-Situation Summary: 
-Risk Level: 
-Immediate Actions: 
-Recommended Authorities: 
-Safety Advice: 
+Output:
+Situation Summary:
+Risk Level:
+Immediate Actions:
+Recommended Authorities:
+Safety Advice:
 """
 
 # ===========================
