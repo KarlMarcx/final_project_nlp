@@ -567,31 +567,18 @@ def calculate_severity(confidence, categories):
 # ===========================
 def generate_section(section_title, incident_text, rag_context, severity):
 
-    if section_title == "Safety Advice":
-        prompt = f"""
-Task: Provide clear safety advice based ONLY on the safety guidelines below.
+    prompt = f"""
+Write a short paragraph for the "{section_title}" section of an emergency report.
 
-Safety Guidelines:
-{rag_context}
-
-Write 2-3 actionable safety recommendations.
-
-Answer:
-"""
-    else:
-        prompt = f"""
-Task: Write a concise {section_title} for an emergency response report.
-
-Incident:
+Incident description:
 {incident_text}
 
-Severity Level:
-{severity}
+Severity level: {severity}
 
-Relevant Safety Information:
+Relevant information:
 {rag_context}
 
-Answer:
+Paragraph:
 """
 
     inputs = gen_tokenizer(
@@ -604,27 +591,16 @@ Answer:
     with torch.no_grad():
         outputs = gen_model.generate(
             **inputs,
-            max_new_tokens=120,
+            max_new_tokens=100,
             do_sample=True,
-            temperature=0.3,
+            temperature=0.5,
             top_p=0.9,
-            repetition_penalty=1.3,
         )
 
     text = gen_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-    # Guard against junk output
-    bad_phrases = [
-        "emergency response",
-        "report",
-        "assessment ongoing",
-        "information currently",
-    ]
-
-    if len(text) < 8 or any(bp in text.lower() for bp in bad_phrases):
-        if section_title == "Safety Advice":
-            return rag_context
-        return "Details are being actively assessed by authorities."
+    if len(text) < 15:
+        return "Information is currently being evaluated."
 
     return text
 
