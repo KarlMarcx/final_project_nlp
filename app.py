@@ -566,7 +566,20 @@ def calculate_severity(confidence, categories):
 # SECTION GENERATOR
 # ===========================
 def generate_section(section_title, incident_text, rag_context, severity):
-    prompt = f"""
+
+    if section_title == "Safety Advice":
+        prompt = f"""
+Task: Provide clear safety advice based ONLY on the safety guidelines below.
+
+Safety Guidelines:
+{rag_context}
+
+Write 2-3 actionable safety recommendations.
+
+Answer:
+"""
+    else:
+        prompt = f"""
 Task: Write a concise {section_title} for an emergency response report.
 
 Incident:
@@ -593,18 +606,27 @@ Answer:
             **inputs,
             max_new_tokens=120,
             do_sample=True,
-            temperature=0.4,
+            temperature=0.3,
             top_p=0.9,
-            repetition_penalty=1.2,
+            repetition_penalty=1.3,
         )
 
     text = gen_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-    if len(text) < 5:
-        return "Information currently being assessed."
+    # Guard against junk output
+    bad_phrases = [
+        "emergency response",
+        "report",
+        "assessment ongoing",
+        "information currently",
+    ]
+
+    if len(text) < 8 or any(bp in text.lower() for bp in bad_phrases):
+        if section_title == "Safety Advice":
+            return rag_context
+        return "Details are being actively assessed by authorities."
 
     return text
-
 
 # ===========================
 # PIPELINE
