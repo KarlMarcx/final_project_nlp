@@ -353,7 +353,11 @@ import faiss
 import numpy as np
 
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForSeq2SeqLM
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    AutoModelForSeq2SeqLM,
+)
 
 # ===========================
 # CONFIG
@@ -374,17 +378,6 @@ def load_classifier():
     model.eval()
     return model, tokenizer
 
-classifier_model, classifier_tokenizer = load_classifier()
-
-
-def predict_emergency(text):
-    inputs = classifier_tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=128).to(device)
-    with torch.no_grad():
-        outputs = classifier_model(**inputs)
-        probs = torch.softmax(outputs.logits, dim=1)
-        score = probs[:, 1].item()
-    return score > THRESHOLD, score
-
 
 @st.cache_resource
 def load_generator():
@@ -394,29 +387,28 @@ def load_generator():
     model.eval()
     return model, tokenizer
 
+
+classifier_model, classifier_tokenizer = load_classifier()
 gen_model, gen_tokenizer = load_generator()
 
-
-def generate_response(prompt):
-    inputs = gen_tokenizer(
-        prompt,
+# ===========================
+# CLASSIFICATION
+# ===========================
+def predict_emergency(text):
+    inputs = classifier_tokenizer(
+        text,
         return_tensors="pt",
         truncation=True,
-        max_length=512
+        padding=True,
+        max_length=128,
     ).to(device)
 
     with torch.no_grad():
-        outputs = gen_model.generate(
-            **inputs,
-            max_new_tokens=300,
-            do_sample=True,        # <- turn sampling back on
-            temperature=0.3,       # <- low randomness
-            top_p=0.9,
-            repetition_penalty=1.2
-        )
+        outputs = classifier_model(**inputs)
+        probs = torch.softmax(outputs.logits, dim=1)
+        score = probs[:, 1].item()
 
-    decoded = gen_tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return decoded.strip()
+    return score > THRESHOLD, score
 
 
 # ===========================
@@ -435,15 +427,23 @@ def clean_text(text):
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 EMERGENCY_CATEGORIES = [
-    "fire", "flood", "earthquake", "storm",
-    "shooting", "violence", "medical emergency",
-    "death incident", "accident"
+    "fire",
+    "flood",
+    "earthquake",
+    "storm",
+    "shooting",
+    "violence",
+    "medical emergency",
+    "death incident",
+    "accident",
 ]
 
-category_embeddings = embedder.encode(EMERGENCY_CATEGORIES, normalize_embeddings=True)
+category_embeddings = embedder.encode(
+    EMERGENCY_CATEGORIES, normalize_embeddings=True
+)
 
 
-def detect_categories(text, threshold=0.30, top_k=3):
+def detect_categories(text, threshold=0.25, top_k=3):
     query_embedding = embedder.encode([text], normalize_embeddings=True)
     similarities = np.dot(category_embeddings, query_embedding.T).squeeze()
     top_indices = similarities.argsort()[-top_k:][::-1]
@@ -453,7 +453,6 @@ def detect_categories(text, threshold=0.30, top_k=3):
         if similarities[idx] >= threshold:
             detected.append(EMERGENCY_CATEGORIES[idx])
 
-    # Keyword safety net
     keyword_map = {
         "fire": "fire",
         "burn": "fire",
@@ -464,37 +463,52 @@ def detect_categories(text, threshold=0.30, top_k=3):
         "crash": "accident",
         "injured": "medical emergency",
         "dead": "death incident",
-        "shoot": "shooting"
+        "shoot": "shooting",
     }
 
-    text_lower = text.lower()
     for key, value in keyword_map.items():
-        if key in text_lower:
+        if key in text:
             detected.append(value)
 
     return list(set(detected))
 
 
 # ===========================
-# KNOWLEDGE BASE
+# KNOWLEDGE BASE + FAISS
 # ===========================
 KNOWLEDGE_BASE = {
-    "fire": ["Evacuate immediately.", "Do not use elevators.", "Stay low to avoid smoke."],
-    "violence": ["Move to a secure location.", "Avoid confrontation.", "Contact law enforcement immediately."],
-    "accident": ["Ensure scene safety.", "Call emergency responders.", "Do not move severely injured individuals."],
-    "medical emergency": ["Call medical services immediately.", "Check breathing and pulse.", "Provide first aid if trained."]
+    "fire": [
+        "Evacuate immediately.",
+        "Do not use elevators.",
+        "Stay low to avoid smoke.",
+    ],
+    "violence": [
+        "Move to a secure location.",
+        "Avoid confrontation.",
+        "Contact law enforcement immediately.",
+    ],
+    "accident": [
+        "Ensure scene safety.",
+        "Call emergency responders.",
+        "Do not move severely injured individuals.",
+    ],
+    "medical emergency": [
+        "Call medical services immediately.",
+        "Check breathing and pulse.",
+        "Provide first aid if trained.",
+    ],
 }
 
-GENERAL_DOCS = ["Ensure your own safety first.", "Call emergency services immediately.", "Assist others only if safe."]
+GENERAL_DOCS = [
+    "Ensure your own safety first.",
+    "Call emergency services immediately.",
+    "Assist others only if safe.",
+]
 
-# ===========================
-# BUILD FAISS INDEX
-# ===========================
 faiss_indices = {}
 for category, docs in KNOWLEDGE_BASE.items():
     embeddings = embedder.encode(docs, normalize_embeddings=True)
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatIP(dim)
+    index = faiss.IndexFlatIP(embeddings.shape[1])
     index.add(np.array(embeddings))
     faiss_indices[category] = (index, docs)
 
@@ -506,15 +520,20 @@ general_index.add(np.array(general_embeddings))
 def rag_retrieve(query, categories, k=2):
     query_embedding = embedder.encode([query], normalize_embeddings=True)
     results = []
+
     for category in categories:
         if category in faiss_indices:
             index, docs = faiss_indices[category]
-            distances, indices = index.search(np.array(query_embedding), min(k, len(docs)))
+            _, indices = index.search(np.array(query_embedding), min(k, len(docs)))
             for i in indices[0]:
                 results.append(docs[i])
+
     if not results:
-        distances, indices = general_index.search(np.array(query_embedding), min(k, len(GENERAL_DOCS)))
+        _, indices = general_index.search(
+            np.array(query_embedding), min(k, len(GENERAL_DOCS))
+        )
         results = [GENERAL_DOCS[i] for i in indices[0]]
+
     return list(set(results))
 
 
@@ -523,41 +542,69 @@ def rag_retrieve(query, categories, k=2):
 # ===========================
 def calculate_severity(confidence, categories):
     score = confidence * 2 + len(categories)
-    if "death incident" in categories: score += 3
-    if "violence" in categories: score += 2
-    if "fire" in categories: score += 2
-    if "medical emergency" in categories: score += 1.5
-    if score >= 6: return "Critical"
-    elif score >= 4: return "High"
-    elif score >= 3: return "Moderate"
-    else: return "Low"
+
+    if "death incident" in categories:
+        score += 3
+    if "violence" in categories:
+        score += 2
+    if "fire" in categories:
+        score += 2
+    if "medical emergency" in categories:
+        score += 1.5
+
+    if score >= 6:
+        return "Critical"
+    elif score >= 4:
+        return "High"
+    elif score >= 3:
+        return "Moderate"
+    else:
+        return "Low"
 
 
 # ===========================
-# PROMPT BUILDER (NO ROLE AT TOP)
+# SECTION GENERATOR
 # ===========================
-def build_prompt(user_text, docs, categories, severity):
-    context = " ".join(docs)
-
-    return f"""
-Task: Generate a structured emergency response report.
+def generate_section(section_title, incident_text, rag_context, severity):
+    prompt = f"""
+Task: Write a concise {section_title} for an emergency response report.
 
 Incident:
-{user_text}
+{incident_text}
 
-Detected Types: {', '.join(categories)}
-Severity Level: {severity}
+Severity Level:
+{severity}
 
-Safety Guidelines:
-{context}
+Relevant Safety Information:
+{rag_context}
 
-Output:
-Situation Summary:
-Risk Level:
-Immediate Actions:
-Recommended Authorities:
-Safety Advice:
+Answer:
 """
+
+    inputs = gen_tokenizer(
+        prompt,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512,
+    ).to(device)
+
+    with torch.no_grad():
+        outputs = gen_model.generate(
+            **inputs,
+            max_new_tokens=120,
+            do_sample=True,
+            temperature=0.4,
+            top_p=0.9,
+            repetition_penalty=1.2,
+        )
+
+    text = gen_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+
+    if len(text) < 5:
+        return "Information currently being assessed."
+
+    return text
+
 
 # ===========================
 # PIPELINE
@@ -565,21 +612,51 @@ Safety Advice:
 def respondrAI_pipeline(text):
     cleaned = clean_text(text)
     is_emergency, confidence = predict_emergency(cleaned)
+
     if not is_emergency:
-        return {"emergency": False, "confidence": round(confidence, 3), "message": "No emergency detected."}
+        return {
+            "emergency": False,
+            "confidence": round(confidence, 3),
+            "message": "No emergency detected.",
+        }
 
     categories = detect_categories(cleaned)
     docs = rag_retrieve(cleaned, categories)
     severity = calculate_severity(confidence, categories)
-    prompt = build_prompt(text, docs, categories, severity)
-    report = generate_response(prompt)
+    rag_context = " ".join(docs)
+
+    summary = generate_section("Situation Summary", text, rag_context, severity)
+    risk = generate_section("Risk Level Assessment", text, rag_context, severity)
+    actions = generate_section("Immediate Actions", text, rag_context, severity)
+    authorities = generate_section(
+        "Recommended Authorities", text, rag_context, severity
+    )
+    advice = generate_section("Safety Advice", text, rag_context, severity)
+
+    report = f"""
+Situation Summary:
+{summary}
+
+Risk Level:
+{risk}
+
+Immediate Actions:
+{actions}
+
+Recommended Authorities:
+{authorities}
+
+Safety Advice:
+{advice}
+"""
+
     return {
         "emergency": True,
         "types": categories if categories else ["general emergency"],
         "severity": severity,
         "confidence": round(confidence, 3),
         "retrieved": docs,
-        "report": report
+        "report": report,
     }
 
 
@@ -596,6 +673,7 @@ if st.button("Analyze"):
         st.warning("Please enter text.")
     else:
         result = respondrAI_pipeline(user_input)
+
         if not result["emergency"]:
             st.success(result["message"])
             st.write("Confidence:", result["confidence"])
@@ -607,8 +685,10 @@ if st.button("Analyze"):
             st.write(result["severity"])
             st.write("### Confidence")
             st.progress(result["confidence"])
+
             st.write("### Retrieved Knowledge")
             for doc in result["retrieved"]:
                 st.write("-", doc)
+
             st.write("### 🤖 AI Generated Report")
             st.write(result["report"])
