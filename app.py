@@ -563,22 +563,15 @@ def calculate_severity(confidence, categories):
 
 
 # ===========================
-# SECTION GENERATOR
+# SAFE SUMMARY GENERATION
 # ===========================
-def generate_section(section_title, incident_text, rag_context, severity):
-
+def generate_summary(incident_text):
     prompt = f"""
-Write a short paragraph for the "{section_title}" section of an emergency report.
+Summarize the following emergency incident in 2-3 sentences without copying it verbatim:
 
-Incident description:
 {incident_text}
 
-Severity level: {severity}
-
-Relevant information:
-{rag_context}
-
-Paragraph:
+Summary:
 """
 
     inputs = gen_tokenizer(
@@ -591,18 +584,13 @@ Paragraph:
     with torch.no_grad():
         outputs = gen_model.generate(
             **inputs,
-            max_new_tokens=100,
-            do_sample=True,
-            temperature=0.5,
-            top_p=0.9,
+            max_new_tokens=120,
+            do_sample=False,
+            num_beams=4,
         )
 
-    text = gen_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+    return gen_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-    if len(text) < 15:
-        return "Information is currently being evaluated."
-
-    return text
 
 # ===========================
 # PIPELINE
@@ -621,15 +609,16 @@ def respondrAI_pipeline(text):
     categories = detect_categories(cleaned)
     docs = rag_retrieve(cleaned, categories)
     severity = calculate_severity(confidence, categories)
-    rag_context = " ".join(docs)
 
-    summary = generate_section("Situation Summary", text, rag_context, severity)
-    risk = generate_section("Risk Level Assessment", text, rag_context, severity)
-    actions = generate_section("Immediate Actions", text, rag_context, severity)
-    authorities = generate_section(
-        "Recommended Authorities", text, rag_context, severity
-    )
-    advice = generate_section("Safety Advice", text, rag_context, severity)
+    summary = generate_summary(text)
+
+    risk = f"The situation is assessed as {severity} based on detected incident categories."
+
+    actions = " ".join(docs)
+
+    authorities = "Local police, fire department, and medical emergency services."
+
+    advice = "Follow official instructions and prioritize personal safety."
 
     report = f"""
 Situation Summary:
