@@ -359,7 +359,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, Auto
 # CONFIG
 # ===========================
 CLASSIFIER_MODEL = "Karyl-Maxine/disaster-distilroberta"
-GEN_MODEL = "google/flan-t5-base"
+GEN_MODEL = "google/flan-t5-large"
 THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -402,9 +402,10 @@ def generate_response(prompt):
     with torch.no_grad():
         outputs = gen_model.generate(
     **inputs,
-    max_new_tokens=300,
+    max_new_tokens=200,
     do_sample=False,   # <- deterministic
-    num_beams=4,       # <- better structure
+    num_beams=5, 
+    repetition_penalty=1.2, 
     early_stopping=True
 )
     decoded = gen_tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -534,8 +535,6 @@ def build_prompt(user_text, docs, categories, severity):
     return f"""
 You are an emergency response expert.
 
-Based on the incident below, generate a complete emergency response report.
-
 Incident:
 {user_text}
 
@@ -545,15 +544,13 @@ Severity Level: {severity}
 Safety Guidelines:
 {context}
 
-Write a detailed emergency report with the following sections:
+Complete the following emergency report:
 
-Situation Summary
-Risk Level
-Immediate Actions
-Recommended Authorities
-Safety Advice
-
-Provide full sentences under each section.
+Situation Summary: 
+Risk Level: 
+Immediate Actions: 
+Recommended Authorities: 
+Safety Advice: 
 """
 
 # ===========================
