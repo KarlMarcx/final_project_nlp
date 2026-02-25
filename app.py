@@ -378,7 +378,6 @@ def load_classifier():
     model.eval()
     return model, tokenizer
 
-
 @st.cache_resource
 def load_generator():
     model = AutoModelForSeq2SeqLM.from_pretrained(GEN_MODEL)
@@ -386,7 +385,6 @@ def load_generator():
     model.to(device)
     model.eval()
     return model, tokenizer
-
 
 classifier_model, classifier_tokenizer = load_classifier()
 gen_model, gen_tokenizer = load_generator()
@@ -410,7 +408,6 @@ def predict_emergency(text):
 
     return score > THRESHOLD, score
 
-
 # ===========================
 # CLEAN TEXT
 # ===========================
@@ -419,7 +416,6 @@ def clean_text(text):
     text = re.sub(r"http\S+", "", text)
     text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text.strip()
-
 
 # ===========================
 # CATEGORY DETECTION
@@ -438,10 +434,7 @@ EMERGENCY_CATEGORIES = [
     "accident",
 ]
 
-category_embeddings = embedder.encode(
-    EMERGENCY_CATEGORIES, normalize_embeddings=True
-)
-
+category_embeddings = embedder.encode(EMERGENCY_CATEGORIES, normalize_embeddings=True)
 
 def detect_categories(text, threshold=0.25, top_k=3):
     query_embedding = embedder.encode([text], normalize_embeddings=True)
@@ -471,7 +464,6 @@ def detect_categories(text, threshold=0.25, top_k=3):
             detected.append(value)
 
     return list(set(detected))
-
 
 # ===========================
 # KNOWLEDGE BASE + FAISS
@@ -516,7 +508,6 @@ general_embeddings = embedder.encode(GENERAL_DOCS, normalize_embeddings=True)
 general_index = faiss.IndexFlatIP(general_embeddings.shape[1])
 general_index.add(np.array(general_embeddings))
 
-
 def rag_retrieve(query, categories, k=2):
     query_embedding = embedder.encode([query], normalize_embeddings=True)
     results = []
@@ -535,7 +526,6 @@ def rag_retrieve(query, categories, k=2):
         results = [GENERAL_DOCS[i] for i in indices[0]]
 
     return list(set(results))
-
 
 # ===========================
 # SEVERITY
@@ -561,6 +551,34 @@ def calculate_severity(confidence, categories):
     else:
         return "Low"
 
+# ===========================
+# DISPATCH UNITS
+# ===========================
+def generate_dispatch_units(categories, severity):
+    units = set()
+    category_map = {
+        "fire": ["Fire Department", "Medical Emergency Services"],
+        "violence": ["Police Department", "Rapid Response Unit"],
+        "accident": ["Traffic/Rescue Unit", "Medical Emergency Services"],
+        "medical emergency": ["Ambulance Services", "First Aid Team"],
+        "death incident": ["Medical Examiner", "Police Department"],
+        "shooting": ["Police Department", "SWAT Team"],
+    }
+    severity_map = {
+        "Low": ["Community Monitoring Unit"],
+        "Moderate": ["Local Emergency Response Team"],
+        "High": ["City Emergency Task Force"],
+        "Critical": ["National Disaster Response Force", "Crisis Management Authority"],
+    }
+
+    for cat in categories:
+        if cat in category_map:
+            units.update(category_map[cat])
+
+    if severity in severity_map:
+        units.update(severity_map[severity])
+
+    return list(units)
 
 # ===========================
 # SAFE SUMMARY GENERATION
@@ -591,7 +609,6 @@ Summary:
 
     return gen_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-
 # ===========================
 # PIPELINE
 # ===========================
@@ -609,15 +626,11 @@ def respondrAI_pipeline(text):
     categories = detect_categories(cleaned)
     docs = rag_retrieve(cleaned, categories)
     severity = calculate_severity(confidence, categories)
-
+    dispatch = generate_dispatch_units(categories, severity)
     summary = generate_summary(text)
 
-    risk = f"The situation is assessed as {severity} based on detected incident categories."
-
     actions = " ".join(docs)
-
     authorities = "Local police, fire department, and medical emergency services."
-
     advice = "Follow official instructions and prioritize personal safety."
 
     report = f"""
@@ -625,7 +638,7 @@ Situation Summary:
 {summary}
 
 Risk Level:
-{risk}
+The situation is assessed as {severity} based on detected incident categories.
 
 Immediate Actions:
 {actions}
@@ -643,9 +656,9 @@ Safety Advice:
         "severity": severity,
         "confidence": round(confidence, 3),
         "retrieved": docs,
+        "dispatch": dispatch,
         "report": report,
     }
-
 
 # ===========================
 # STREAMLIT UI
@@ -676,6 +689,10 @@ if st.button("Analyze"):
             st.write("### Retrieved Knowledge")
             for doc in result["retrieved"]:
                 st.write("-", doc)
+
+            st.write("### Dispatch Units")
+            for unit in result["dispatch"]:
+                st.write("-", unit)
 
             st.write("### 🤖 AI Generated Report")
             st.write(result["report"])
