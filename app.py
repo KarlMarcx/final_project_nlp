@@ -15,7 +15,7 @@ from transformers import (
 # CONFIG
 # ===========================
 CLASSIFIER_MODEL = "Karyl-Maxine/disaster-distilroberta"
-GEN_MODEL = "google/flan-t5-large"  # Keep your prompt logic unchanged
+GEN_MODEL = "google/flan-t5-base"  # smaller, faster
 THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -202,6 +202,7 @@ def generate_dispatch_units(categories, severity):
 # ===========================
 # SAFE SUMMARY GENERATION
 # ===========================
+@st.cache_data
 def generate_summary(incident_text):
     prompt = f"""
 Summarize the following emergency incident in 2-3 sentences without copying it verbatim:
@@ -215,8 +216,9 @@ Summary:
         outputs = gen_model.generate(
             **inputs,
             max_new_tokens=120,
-            do_sample=False,
-            num_beams=4,
+            do_sample=True,   # faster than beam search
+            top_p=0.9,
+            temperature=0.7
         )
     return gen_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
