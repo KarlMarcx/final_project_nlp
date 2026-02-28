@@ -3,6 +3,7 @@ import torch
 import re
 import faiss
 import numpy as np
+import threading
 
 from sentence_transformers import SentenceTransformer
 from transformers import (
@@ -94,7 +95,6 @@ def detect_categories(text, threshold=0.25, top_k=3):
         if similarities[idx] >= threshold:
             detected.append(EMERGENCY_CATEGORIES[idx])
 
-    # Keyword safety net
     keyword_map = {
         "fire": "fire",
         "burn": "fire",
@@ -200,7 +200,7 @@ def generate_dispatch_units(categories, severity):
     return list(units)
 
 # ===========================
-# SAFE SUMMARY GENERATION
+# SAFE SUMMARY GENERATION (BACKGROUND THREAD)
 # ===========================
 @st.cache_data
 def generate_summary(incident_text):
@@ -216,7 +216,7 @@ Summary:
         outputs = gen_model.generate(
             **inputs,
             max_new_tokens=120,
-            do_sample=True,   # faster than beam search
+            do_sample=True,
             top_p=0.9,
             temperature=0.7
         )
@@ -235,7 +235,6 @@ def respondrAI_pipeline(text):
     docs = rag_retrieve(cleaned, categories)
     severity = calculate_severity(confidence, categories)
     dispatch = generate_dispatch_units(categories, severity)
-    summary = generate_summary(text)
 
     actions = " ".join(docs)
     authorities = "Local police, fire department, and medical emergency services."
@@ -243,7 +242,7 @@ def respondrAI_pipeline(text):
 
     report = f"""
 Situation Summary:
-{summary}
+<summary_loading>
 
 Risk Level:
 The situation is assessed as {severity} based on detected incident categories.
@@ -302,4 +301,14 @@ if st.button("Analyze"):
                 st.write("-", unit)
 
             st.write("### 🤖 AI Generated Report")
-            st.write(result["report"])
+            report_placeholder = st.empty()
+            report_text = result["report"].replace("<summary_loading>", "Generating AI summary...")  
+            report_placeholder.write(report_text)
+
+            # Generate summary in background thread
+            def fill_summary():
+                summary_text = generate_summary(user_input)
+                final_report = report_text.replace("Generating AI summary...", summary_text)
+                report_placeholder.write(final_report)
+
+            threading.Thread(target=fill_summary).start()
