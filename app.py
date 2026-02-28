@@ -270,7 +270,7 @@ Safety Advice:
 # STREAMLIT UI
 # ===========================
 st.set_page_config(page_title="RespondrAI Generative RAG", page_icon="🚨")
-st.title("🚨 RespondrAI - Robust Generative RAG Emergency Agent")
+st.title("🚨 RespondrAI - Emergency Agent")
 
 user_input = st.text_area("Enter an incident report or tweet:")
 
