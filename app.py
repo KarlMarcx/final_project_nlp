@@ -3,25 +3,21 @@ import torch
 import re
 import faiss
 import numpy as np
-
 from sentence_transformers import SentenceTransformer
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    AutoModelForSeq2SeqLM,
-)
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import openai
 
-# =========================
 # CONFIG
-# =========================
 CLASSIFIER_MODEL = "Karyl-Maxine/disaster-distilroberta"
-GEN_MODEL = "google/flan-t5-small"  # switched to small for speed
 THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# =========================
+# Groq API setup (OpenAI compatible)
+groq_api_key = st.secrets["GROQ"]["API_KEY"]
+groq_base_url = "https://api.groq.com/openai/v1"
+client = openai.OpenAI(api_key=groq_api_key, base_url=groq_base_url)
+
 # LOAD MODELS
-# =========================
 @st.cache_resource
 def load_classifier():
     model = AutoModelForSequenceClassification.from_pretrained(CLASSIFIER_MODEL)
@@ -31,24 +27,13 @@ def load_classifier():
     return model, tokenizer
 
 @st.cache_resource
-def load_generator():
-    model = AutoModelForSeq2SeqLM.from_pretrained(GEN_MODEL)
-    tokenizer = AutoTokenizer.from_pretrained(GEN_MODEL)
-    model.to(device)
-    model.eval()
-    return model, tokenizer
-
-@st.cache_resource
 def load_embedder():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 classifier_model, classifier_tokenizer = load_classifier()
-gen_model, gen_tokenizer = load_generator()
 embedder = load_embedder()
 
-# =========================
 # CLASSIFICATION
-# =========================
 def predict_emergency(text):
     inputs = classifier_tokenizer(
         text,
@@ -65,18 +50,14 @@ def predict_emergency(text):
 
     return score > THRESHOLD, score
 
-# =========================
 # CLEAN TEXT
-# =========================
 def clean_text(text):
     text = text.lower()
     text = re.sub(r"http\S+", "", text)
     text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text.strip()
 
-# =========================
 # CATEGORY DETECTION
-# =========================
 EMERGENCY_CATEGORIES = [
     "fire", "flood", "earthquake", "storm",
     "shooting", "violence", "medical emergency",
@@ -97,10 +78,7 @@ def detect_categories(text, threshold=0.25, top_k=3):
     keyword_map = {
         "fire": "fire",
         "burn": "fire",
-        "ablaze": "fire",
         "violence": "violence",
-        "riot": "violence",
-        "stone": "violence",
         "crash": "accident",
         "injured": "medical emergency",
         "dead": "death incident",
@@ -112,9 +90,7 @@ def detect_categories(text, threshold=0.25, top_k=3):
 
     return list(set(detected))
 
-# =========================
 # KNOWLEDGE BASE + FAISS
-# =========================
 KNOWLEDGE_BASE = {
     "fire": ["Evacuate immediately.", "Do not use elevators.", "Stay low to avoid smoke."],
     "violence": ["Move to a secure location.", "Avoid confrontation.", "Contact law enforcement immediately."],
@@ -156,9 +132,7 @@ def rag_retrieve(query, categories, k=2):
 
     return list(set(results))
 
-# =========================
 # SEVERITY & DISPATCH
-# =========================
 def calculate_severity(confidence, categories):
     score = confidence * 2 + len(categories)
     if "death incident" in categories: score += 3
@@ -195,31 +169,21 @@ def generate_dispatch_units(categories, severity):
         units.update(severity_map[severity])
     return list(units)
 
-# =========================
-# SUMMARY GENERATION (synchronous)
-# =========================
-def generate_summary(text):
-    prompt = f"""
-Summarize the following emergency incident in 2-3 sentences without copying it verbatim:
-
-{text}
-
-Summary:
-"""
-    inputs = gen_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
-    with torch.no_grad():
-        outputs = gen_model.generate(
-            **inputs,
-            max_new_tokens=120,
-            do_sample=True,
-            top_p=0.9,
-            temperature=0.7
+# SUMMARY with Groq API
+def generate_summary_groq(text):
+    prompt = f"Summarize the following incident in 2–3 sentences:\n\n{text}"
+    try:
+        response = client.chat.completions.create(
+            model="gpt-oss-20b",  # Groq-hosted open-source model
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=150,
         )
-    return gen_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return "Summary generation failed."
 
-# =========================
 # PIPELINE
-# =========================
 def respondrAI_pipeline(text):
     cleaned = clean_text(text)
     is_emergency, confidence = predict_emergency(cleaned)
@@ -230,7 +194,8 @@ def respondrAI_pipeline(text):
     docs = rag_retrieve(cleaned, categories)
     severity = calculate_severity(confidence, categories)
     dispatch = generate_dispatch_units(categories, severity)
-    summary = generate_summary(text)  # generate summary immediately
+
+    summary = generate_summary_groq(text)
 
     actions = " ".join(docs)
     authorities = "Local police, fire department, and medical emergency services."
@@ -262,9 +227,7 @@ Safety Advice:
         "report": report
     }
 
-# =========================
 # STREAMLIT UI
-# =========================
 st.set_page_config(page_title="RespondrAI Generative RAG", page_icon="🚨")
 st.title("🚨 RespondrAI - Emergency Agent")
 
