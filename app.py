@@ -19,9 +19,6 @@ groq_api_key = st.secrets["GROQ"]["API_KEY"]
 groq_base_url = "https://api.groq.com/openai/v1"
 client = openai.OpenAI(api_key=groq_api_key, base_url=groq_base_url)
 
-models = client.models.list()
-for m in models.data:
-    print(m.id)
 # ==========================
 # LOAD MODELS
 # ==========================
@@ -190,7 +187,7 @@ def generate_summary_groq(text):
     prompt = f"Summarize the following incident in 2–3 sentences:\n\n{text}"
     try:
         response = client.chat.completions.create(
-            model="nous-hermes-13b-mini",   # free-tier model
+            model="llama3-8b-8192",  # Groq free-tier recommended model
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=150,
