@@ -7,17 +7,21 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import openai
 
+# ==========================
 # CONFIG
+# ==========================
 CLASSIFIER_MODEL = "Karyl-Maxine/disaster-distilroberta"
 THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Groq API setup (OpenAI compatible)
+# Groq API setup (OpenAI compatible free-tier)
 groq_api_key = st.secrets["GROQ"]["API_KEY"]
 groq_base_url = "https://api.groq.com/openai/v1"
 client = openai.OpenAI(api_key=groq_api_key, base_url=groq_base_url)
 
+# ==========================
 # LOAD MODELS
+# ==========================
 @st.cache_resource
 def load_classifier():
     model = AutoModelForSequenceClassification.from_pretrained(CLASSIFIER_MODEL)
@@ -33,7 +37,9 @@ def load_embedder():
 classifier_model, classifier_tokenizer = load_classifier()
 embedder = load_embedder()
 
-# CLASSIFICATION
+# ==========================
+# UTILITY FUNCTIONS
+# ==========================
 def predict_emergency(text):
     inputs = classifier_tokenizer(
         text,
@@ -50,14 +56,15 @@ def predict_emergency(text):
 
     return score > THRESHOLD, score
 
-# CLEAN TEXT
 def clean_text(text):
     text = text.lower()
     text = re.sub(r"http\S+", "", text)
     text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text.strip()
 
+# ==========================
 # CATEGORY DETECTION
+# ==========================
 EMERGENCY_CATEGORIES = [
     "fire", "flood", "earthquake", "storm",
     "shooting", "violence", "medical emergency",
@@ -90,7 +97,9 @@ def detect_categories(text, threshold=0.25, top_k=3):
 
     return list(set(detected))
 
+# ==========================
 # KNOWLEDGE BASE + FAISS
+# ==========================
 KNOWLEDGE_BASE = {
     "fire": ["Evacuate immediately.", "Do not use elevators.", "Stay low to avoid smoke."],
     "violence": ["Move to a secure location.", "Avoid confrontation.", "Contact law enforcement immediately."],
@@ -132,7 +141,9 @@ def rag_retrieve(query, categories, k=2):
 
     return list(set(results))
 
+# ==========================
 # SEVERITY & DISPATCH
+# ==========================
 def calculate_severity(confidence, categories):
     score = confidence * 2 + len(categories)
     if "death incident" in categories: score += 3
@@ -169,21 +180,26 @@ def generate_dispatch_units(categories, severity):
         units.update(severity_map[severity])
     return list(units)
 
-# SUMMARY with Groq API
+# ==========================
+# SUMMARY WITH GROQ FREE-TIER
+# ==========================
 def generate_summary_groq(text):
     prompt = f"Summarize the following incident in 2–3 sentences:\n\n{text}"
     try:
-        response = client.chat.completions.create(
-            model="nous-hermes-13b-mini",  # <- use your free-tier accessible model
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
+        response = client.completions.create(
+            model="nous-hermes-13b-mini",  # free-tier model
+            prompt=prompt,
             max_tokens=150,
+            temperature=0.7
         )
-        return response.choices[0].message.content.strip()
+        return response.choices[0].text.strip()
     except Exception as e:
+        st.error(f"Groq API error: {e}")
         return "Summary generation failed."
 
+# ==========================
 # PIPELINE
+# ==========================
 def respondrAI_pipeline(text):
     cleaned = clean_text(text)
     is_emergency, confidence = predict_emergency(cleaned)
@@ -195,7 +211,9 @@ def respondrAI_pipeline(text):
     severity = calculate_severity(confidence, categories)
     dispatch = generate_dispatch_units(categories, severity)
 
-    summary = generate_summary_groq(text)
+    # Spinner for user feedback
+    with st.spinner("Generating AI summary…"):
+        summary = generate_summary_groq(text)
 
     actions = " ".join(docs)
     authorities = "Local police, fire department, and medical emergency services."
@@ -227,7 +245,9 @@ Safety Advice:
         "report": report
     }
 
+# ==========================
 # STREAMLIT UI
+# ==========================
 st.set_page_config(page_title="RespondrAI Generative RAG", page_icon="🚨")
 st.title("🚨 RespondrAI - Emergency Agent")
 
