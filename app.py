@@ -186,13 +186,13 @@ def generate_dispatch_units(categories, severity):
 def generate_summary_groq(text):
     prompt = f"Summarize the following incident in 2–3 sentences:\n\n{text}"
     try:
-        response = client.completions.create(
-            model="nous-hermes-13b-mini",  # free-tier model
-            prompt=prompt,
+        response = client.chat.completions.create(
+            model="nous-hermes-13b-mini",   # free-tier model
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
             max_tokens=150,
-            temperature=0.7
         )
-        return response.choices[0].text.strip()
+        return response.choices[0].message.content.strip()
     except Exception as e:
         st.error(f"Groq API error: {e}")
         return "Summary generation failed."
