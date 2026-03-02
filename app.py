@@ -174,7 +174,7 @@ def generate_summary_groq(text):
     prompt = f"Summarize the following incident in 2–3 sentences:\n\n{text}"
     try:
         response = client.chat.completions.create(
-            model="gpt-oss-20b",  # Groq-hosted open-source model
+            model="nous-hermes-13b-mini",  # <- use your free-tier accessible model
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=150,
