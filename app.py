@@ -187,7 +187,7 @@ def generate_summary_groq(text):
     prompt = f"Summarize the following incident in 2–3 sentences:\n\n{text}"
     try:
         response = client.chat.completions.create(
-            model="llama3-8b-8192",  # Groq free-tier recommended model
+            model="llama-3.1-8b-instant",  # Groq free-tier recommended model
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=150,
