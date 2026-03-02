@@ -3,7 +3,6 @@ import torch
 import re
 import faiss
 import numpy as np
-import threading
 
 from sentence_transformers import SentenceTransformer
 from transformers import (
@@ -12,17 +11,17 @@ from transformers import (
     AutoModelForSeq2SeqLM,
 )
 
-# ===========================
+# =========================
 # CONFIG
-# ===========================
+# =========================
 CLASSIFIER_MODEL = "Karyl-Maxine/disaster-distilroberta"
-GEN_MODEL = "google/flan-t5-base"  # smaller, faster
+GEN_MODEL = "google/flan-t5-small"  # switched to small for speed
 THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ===========================
-# LOAD MODELS WITH CACHING
-# ===========================
+# =========================
+# LOAD MODELS
+# =========================
 @st.cache_resource
 def load_classifier():
     model = AutoModelForSequenceClassification.from_pretrained(CLASSIFIER_MODEL)
@@ -47,9 +46,9 @@ classifier_model, classifier_tokenizer = load_classifier()
 gen_model, gen_tokenizer = load_generator()
 embedder = load_embedder()
 
-# ===========================
+# =========================
 # CLASSIFICATION
-# ===========================
+# =========================
 def predict_emergency(text):
     inputs = classifier_tokenizer(
         text,
@@ -66,18 +65,18 @@ def predict_emergency(text):
 
     return score > THRESHOLD, score
 
-# ===========================
+# =========================
 # CLEAN TEXT
-# ===========================
+# =========================
 def clean_text(text):
     text = text.lower()
     text = re.sub(r"http\S+", "", text)
     text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text.strip()
 
-# ===========================
+# =========================
 # CATEGORY DETECTION
-# ===========================
+# =========================
 EMERGENCY_CATEGORIES = [
     "fire", "flood", "earthquake", "storm",
     "shooting", "violence", "medical emergency",
@@ -113,9 +112,9 @@ def detect_categories(text, threshold=0.25, top_k=3):
 
     return list(set(detected))
 
-# ===========================
+# =========================
 # KNOWLEDGE BASE + FAISS
-# ===========================
+# =========================
 KNOWLEDGE_BASE = {
     "fire": ["Evacuate immediately.", "Do not use elevators.", "Stay low to avoid smoke."],
     "violence": ["Move to a secure location.", "Avoid confrontation.", "Contact law enforcement immediately."],
@@ -157,9 +156,9 @@ def rag_retrieve(query, categories, k=2):
 
     return list(set(results))
 
-# ===========================
-# SEVERITY
-# ===========================
+# =========================
+# SEVERITY & DISPATCH
+# =========================
 def calculate_severity(confidence, categories):
     score = confidence * 2 + len(categories)
     if "death incident" in categories: score += 3
@@ -172,9 +171,6 @@ def calculate_severity(confidence, categories):
     elif score >= 3: return "Moderate"
     else: return "Low"
 
-# ===========================
-# DISPATCH UNITS
-# ===========================
 def generate_dispatch_units(categories, severity):
     units = set()
     category_map = {
@@ -199,15 +195,14 @@ def generate_dispatch_units(categories, severity):
         units.update(severity_map[severity])
     return list(units)
 
-# ===========================
-# SAFE SUMMARY GENERATION (BACKGROUND THREAD)
-# ===========================
-@st.cache_data
-def generate_summary(incident_text):
+# =========================
+# SUMMARY GENERATION (synchronous)
+# =========================
+def generate_summary(text):
     prompt = f"""
 Summarize the following emergency incident in 2-3 sentences without copying it verbatim:
 
-{incident_text}
+{text}
 
 Summary:
 """
@@ -222,9 +217,9 @@ Summary:
         )
     return gen_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
-# ===========================
+# =========================
 # PIPELINE
-# ===========================
+# =========================
 def respondrAI_pipeline(text):
     cleaned = clean_text(text)
     is_emergency, confidence = predict_emergency(cleaned)
@@ -235,6 +230,7 @@ def respondrAI_pipeline(text):
     docs = rag_retrieve(cleaned, categories)
     severity = calculate_severity(confidence, categories)
     dispatch = generate_dispatch_units(categories, severity)
+    summary = generate_summary(text)  # generate summary immediately
 
     actions = " ".join(docs)
     authorities = "Local police, fire department, and medical emergency services."
@@ -242,7 +238,7 @@ def respondrAI_pipeline(text):
 
     report = f"""
 Situation Summary:
-<summary_loading>
+{summary}
 
 Risk Level:
 The situation is assessed as {severity} based on detected incident categories.
@@ -266,9 +262,9 @@ Safety Advice:
         "report": report
     }
 
-# ===========================
+# =========================
 # STREAMLIT UI
-# ===========================
+# =========================
 st.set_page_config(page_title="RespondrAI Generative RAG", page_icon="🚨")
 st.title("🚨 RespondrAI - Emergency Agent")
 
@@ -301,14 +297,4 @@ if st.button("Analyze"):
                 st.write("-", unit)
 
             st.write("### 🤖 AI Generated Report")
-            report_placeholder = st.empty()
-            report_text = result["report"].replace("<summary_loading>", "Generating AI summary...")  
-            report_placeholder.write(report_text)
-
-            # Generate summary in background thread
-            def fill_summary():
-                summary_text = generate_summary(user_input)
-                final_report = report_text.replace("Generating AI summary...", summary_text)
-                report_placeholder.write(final_report)
-
-            threading.Thread(target=fill_summary).start()
+            st.write(result["report"])
