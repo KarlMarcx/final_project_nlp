@@ -14,7 +14,7 @@ CLASSIFIER_MODEL = "Karyl-Maxine/disaster-distilroberta"
 THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Groq API setup (OpenAI compatible free-tier)
+# Groq API setup (OpenAI compatible)
 groq_api_key = st.secrets["GROQ"]["API_KEY"]
 groq_base_url = "https://api.groq.com/openai/v1"
 client = openai.OpenAI(api_key=groq_api_key, base_url=groq_base_url)
@@ -66,32 +66,37 @@ def clean_text(text):
 # CATEGORY DETECTION
 # ==========================
 EMERGENCY_CATEGORIES = [
-    "fire", "flood", "earthquake", "storm",
-    "shooting", "violence", "medical emergency",
-    "death incident", "accident"
+    "fire","flood","earthquake","storm",
+    "shooting","violence","medical emergency",
+    "death incident","accident"
 ]
+
 category_embeddings = embedder.encode(EMERGENCY_CATEGORIES, normalize_embeddings=True)
 
 def detect_categories(text, threshold=0.25, top_k=3):
+
     query_embedding = embedder.encode([text], normalize_embeddings=True)
     similarities = np.dot(category_embeddings, query_embedding.T).squeeze()
+
     top_indices = similarities.argsort()[-top_k:][::-1]
 
     detected = []
+
     for idx in top_indices:
         if similarities[idx] >= threshold:
             detected.append(EMERGENCY_CATEGORIES[idx])
 
     keyword_map = {
-        "fire": "fire",
-        "burn": "fire",
-        "violence": "violence",
-        "crash": "accident",
-        "injured": "medical emergency",
-        "dead": "death incident",
-        "shoot": "shooting",
+        "fire":"fire",
+        "burn":"fire",
+        "violence":"violence",
+        "crash":"accident",
+        "injured":"medical emergency",
+        "dead":"death incident",
+        "shoot":"shooting",
     }
-    for key, value in keyword_map.items():
+
+    for key,value in keyword_map.items():
         if key in text:
             detected.append(value)
 
@@ -101,51 +106,93 @@ def detect_categories(text, threshold=0.25, top_k=3):
 # KNOWLEDGE BASE + FAISS
 # ==========================
 KNOWLEDGE_BASE = {
-    "fire": ["Evacuate immediately.", "Do not use elevators.", "Stay low to avoid smoke."],
-    "violence": ["Move to a secure location.", "Avoid confrontation.", "Contact law enforcement immediately."],
-    "accident": ["Ensure scene safety.", "Call emergency responders.", "Do not move severely injured individuals."],
-    "medical emergency": ["Call medical services immediately.", "Check breathing and pulse.", "Provide first aid if trained."],
+
+    "fire":[
+        "Evacuate immediately.",
+        "Do not use elevators.",
+        "Stay low to avoid smoke."
+    ],
+
+    "violence":[
+        "Move to a secure location.",
+        "Avoid confrontation.",
+        "Contact law enforcement immediately."
+    ],
+
+    "accident":[
+        "Ensure scene safety.",
+        "Call emergency responders.",
+        "Do not move severely injured individuals."
+    ],
+
+    "medical emergency":[
+        "Call medical services immediately.",
+        "Check breathing and pulse.",
+        "Provide first aid if trained."
+    ]
 }
-GENERAL_DOCS = ["Ensure your own safety first.", "Call emergency services immediately.", "Assist others only if safe."]
+
+GENERAL_DOCS = [
+    "Ensure your own safety first.",
+    "Call emergency services immediately.",
+    "Assist others only if safe."
+]
 
 @st.cache_resource
 def build_faiss():
+
     faiss_indices = {}
-    for category, docs in KNOWLEDGE_BASE.items():
+
+    for category,docs in KNOWLEDGE_BASE.items():
+
         embeddings = embedder.encode(docs, normalize_embeddings=True)
+
         index = faiss.IndexFlatIP(embeddings.shape[1])
         index.add(np.array(embeddings))
-        faiss_indices[category] = (index, docs)
+
+        faiss_indices[category] = (index,docs)
 
     general_embeddings = embedder.encode(GENERAL_DOCS, normalize_embeddings=True)
+
     general_index = faiss.IndexFlatIP(general_embeddings.shape[1])
     general_index.add(np.array(general_embeddings))
-    return faiss_indices, general_index
 
-faiss_indices, general_index = build_faiss()
+    return faiss_indices,general_index
 
-def rag_retrieve(query, categories, k=2):
+faiss_indices,general_index = build_faiss()
+
+def rag_retrieve(query,categories,k=2):
+
     query_embedding = embedder.encode([query], normalize_embeddings=True)
+
     results = []
 
     for category in categories:
+
         if category in faiss_indices:
-            index, docs = faiss_indices[category]
-            _, indices = index.search(np.array(query_embedding), min(k, len(docs)))
+
+            index,docs = faiss_indices[category]
+
+            _,indices = index.search(np.array(query_embedding),min(k,len(docs)))
+
             for i in indices[0]:
                 results.append(docs[i])
 
     if not results:
-        _, indices = general_index.search(np.array(query_embedding), min(k, len(GENERAL_DOCS)))
+
+        _,indices = general_index.search(np.array(query_embedding),min(k,len(GENERAL_DOCS)))
+
         results = [GENERAL_DOCS[i] for i in indices[0]]
 
     return list(set(results))
 
 # ==========================
-# SEVERITY & DISPATCH
+# SEVERITY + DISPATCH
 # ==========================
-def calculate_severity(confidence, categories):
-    score = confidence * 2 + len(categories)
+def calculate_severity(confidence,categories):
+
+    score = confidence*2 + len(categories)
+
     if "death incident" in categories: score += 3
     if "violence" in categories: score += 2
     if "fire" in categories: score += 2
@@ -156,67 +203,112 @@ def calculate_severity(confidence, categories):
     elif score >= 3: return "Moderate"
     else: return "Low"
 
-def generate_dispatch_units(categories, severity):
+def generate_dispatch_units(categories,severity):
+
     units = set()
+
     category_map = {
-        "fire": ["Fire Department", "Medical Emergency Services"],
-        "violence": ["Police Department", "Rapid Response Unit"],
-        "accident": ["Traffic/Rescue Unit", "Medical Emergency Services"],
-        "medical emergency": ["Ambulance Services", "First Aid Team"],
-        "death incident": ["Medical Examiner", "Police Department"],
-        "shooting": ["Police Department", "SWAT Team"],
+
+        "fire":["Fire Department","Medical Emergency Services"],
+        "violence":["Police Department","Rapid Response Unit"],
+        "accident":["Traffic/Rescue Unit","Medical Emergency Services"],
+        "medical emergency":["Ambulance Services","First Aid Team"],
+        "death incident":["Medical Examiner","Police Department"],
+        "shooting":["Police Department","SWAT Team"]
+
     }
+
     severity_map = {
-        "Low": ["Community Monitoring Unit"],
-        "Moderate": ["Local Emergency Response Team"],
-        "High": ["City Emergency Task Force"],
-        "Critical": ["National Disaster Response Force", "Crisis Management Authority"],
+
+        "Low":["Community Monitoring Unit"],
+        "Moderate":["Local Emergency Response Team"],
+        "High":["City Emergency Task Force"],
+        "Critical":["National Disaster Response Force","Crisis Management Authority"]
+
     }
 
     for cat in categories:
         if cat in category_map:
             units.update(category_map[cat])
+
     if severity in severity_map:
         units.update(severity_map[severity])
+
     return list(units)
 
 # ==========================
-# SUMMARY WITH GROQ FREE-TIER
+# GROQ SUMMARY
 # ==========================
-def generate_summary_groq(text):
-    prompt = f"Summarize the following incident in 2–3 sentences:\n\n{text}"
+def generate_summary_groq(text,docs):
+
+    context = " ".join(docs)
+
+    prompt = f"""
+Incident Report:
+{text}
+
+Relevant Emergency Guidelines:
+{context}
+
+Generate a concise 2–3 sentence emergency summary describing the situation and key response considerations.
+"""
+
     try:
+
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",  # Groq free-tier recommended model
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=150,
+
+            model="llama-3.1-8b-instant",
+
+            messages=[
+                {"role":"user","content":prompt}
+            ],
+
+            temperature=0.5,
+            max_tokens=150
+
         )
+
         return response.choices[0].message.content.strip()
+
     except Exception as e:
+
         st.error(f"Groq API error: {e}")
+
         return "Summary generation failed."
 
 # ==========================
 # PIPELINE
 # ==========================
 def respondrAI_pipeline(text):
+
     cleaned = clean_text(text)
-    is_emergency, confidence = predict_emergency(cleaned)
+
+    is_emergency,confidence = predict_emergency(cleaned)
+
     if not is_emergency:
-        return {"emergency": False, "confidence": round(confidence,3), "message": "No emergency detected."}
+
+        return {
+            "emergency":False,
+            "confidence":round(confidence,3),
+            "message":"No emergency detected."
+        }
 
     categories = detect_categories(cleaned)
-    docs = rag_retrieve(cleaned, categories)
-    severity = calculate_severity(confidence, categories)
-    dispatch = generate_dispatch_units(categories, severity)
 
-    # Spinner for user feedback
+    docs = rag_retrieve(cleaned,categories)
+
+    severity = calculate_severity(confidence,categories)
+
+    dispatch = generate_dispatch_units(categories,severity)
+
     with st.spinner("Generating AI summary…"):
-        summary = generate_summary_groq(text)
+
+        summary = generate_summary_groq(text,docs)
 
     actions = " ".join(docs)
+
     authorities = "Local police, fire department, and medical emergency services."
+
     advice = "Follow official instructions and prioritize personal safety."
 
     report = f"""
@@ -235,49 +327,66 @@ Recommended Authorities:
 Safety Advice:
 {advice}
 """
+
     return {
-        "emergency": True,
-        "types": categories if categories else ["general emergency"],
-        "severity": severity,
-        "confidence": round(confidence,3),
-        "retrieved": docs,
-        "dispatch": dispatch,
-        "report": report
+
+        "emergency":True,
+        "types":categories if categories else ["general emergency"],
+        "severity":severity,
+        "confidence":round(confidence,3),
+        "retrieved":docs,
+        "dispatch":dispatch,
+        "report":report
+
     }
 
 # ==========================
 # STREAMLIT UI
 # ==========================
-st.set_page_config(page_title="RespondrAI Generative RAG", page_icon="🚨")
+st.set_page_config(page_title="RespondrAI Generative RAG",page_icon="🚨")
+
 st.title("🚨 RespondrAI - Emergency Agent")
 
 user_input = st.text_area("Enter an incident report or tweet:")
 
 if st.button("Analyze"):
+
     if not user_input.strip():
+
         st.warning("Please enter text.")
+
     else:
+
         result = respondrAI_pipeline(user_input)
 
         if not result["emergency"]:
+
             st.success(result["message"])
-            st.write("Confidence:", result["confidence"])
+
+            st.write("Confidence:",result["confidence"])
+
         else:
+
             st.error("🚨 Emergency Detected!")
+
             st.write("### Incident Types")
             st.write(", ".join(result["types"]))
+
             st.write("### Severity")
             st.write(result["severity"])
+
             st.write("### Confidence")
             st.progress(result["confidence"])
 
             st.write("### Retrieved Knowledge")
+
             for doc in result["retrieved"]:
-                st.write("-", doc)
+                st.write("-",doc)
 
             st.write("### Dispatch Units")
-            for unit in result["dispatch"]:
-                st.write("-", unit)
 
-            st.write("### 🤖 AI Generated Report")
+            for unit in result["dispatch"]:
+                st.write("-",unit)
+
+            st.write("### AI Generated Report")
             st.write(result["report"])
