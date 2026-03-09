@@ -67,7 +67,7 @@ EMERGENCY_CATEGORIES = [
 
 category_embeddings = embedder.encode(EMERGENCY_CATEGORIES, normalize_embeddings=True)
 
-def detect_categories(text, threshold=0.20, top_k=7):
+def detect_categories(text, threshold=0.20, top_k=5):
 
     query_embedding = embedder.encode([text], normalize_embeddings=True)
     similarities = np.dot(category_embeddings, query_embedding.T).squeeze()
