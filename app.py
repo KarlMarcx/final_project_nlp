@@ -76,7 +76,7 @@ def detect_categories(text, threshold=0.25, top_k=3):
         "burn":"fire",
         "flame":"fire",
         "smoke":"fire",
-        "burning":"fire",
+        "ablaze":"fire",
 
         "flood":"flood",
         "water rising":"flood",
