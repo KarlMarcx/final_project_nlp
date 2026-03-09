@@ -67,32 +67,56 @@ EMERGENCY_CATEGORIES = [
 
 category_embeddings = embedder.encode(EMERGENCY_CATEGORIES, normalize_embeddings=True)
 
-def detect_categories(text, threshold=0.20, top_k=5):
-
-    query_embedding = embedder.encode([text], normalize_embeddings=True)
-    similarities = np.dot(category_embeddings, query_embedding.T).squeeze()
-
-    top_indices = similarities.argsort()[-top_k:][::-1]
+def detect_categories(text, threshold=0.25, top_k=3):
 
     detected = []
-
-    for idx in top_indices:
-        if similarities[idx] >= threshold:
-            detected.append(EMERGENCY_CATEGORIES[idx])
 
     keyword_map = {
         "fire":"fire",
         "burn":"fire",
+        "flame":"fire",
+        "smoke":"fire",
+        "burning":"fire",
+
+        "flood":"flood",
+        "water rising":"flood",
+
+        "earthquake":"earthquake",
+        "tremor":"earthquake",
+
+        "storm":"storm",
+        "typhoon":"storm",
+        "hurricane":"storm",
+
         "violence":"violence",
+        "attack":"violence",
+
         "crash":"accident",
+        "collision":"accident",
+
         "injured":"medical emergency",
+        "bleeding":"medical emergency",
+
         "dead":"death incident",
+
         "shoot":"shooting",
+        "gun":"shooting"
     }
 
     for key,value in keyword_map.items():
         if key in text:
             detected.append(value)
+
+    if not detected:
+
+        query_embedding = embedder.encode([text], normalize_embeddings=True)
+        similarities = np.dot(category_embeddings, query_embedding.T).squeeze()
+
+        top_indices = similarities.argsort()[-top_k:][::-1]
+
+        for idx in top_indices:
+            if similarities[idx] >= threshold:
+                detected.append(EMERGENCY_CATEGORIES[idx])
 
     return list(set(detected))
 
