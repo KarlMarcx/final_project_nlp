@@ -317,7 +317,6 @@ def respondrAI_pipeline(text):
     advice = "Follow official instructions and prioritize personal safety."
 
     report = f"""
-Situation Summary:
 {summary}
 
 Safety Advice:
