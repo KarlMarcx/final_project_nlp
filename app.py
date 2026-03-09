@@ -1,3 +1,5 @@
+# RespondrAI: Agentic AI System for Emergency Incident Classification and Dispatch using Disaster Tweets
+
 import streamlit as st
 import torch
 import re
@@ -7,9 +9,7 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import openai
 
-# ==========================
 # CONFIG
-# ==========================
 CLASSIFIER_MODEL = "Karyl-Maxine/disaster-distilroberta"
 THRESHOLD = 0.65
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -19,9 +19,7 @@ groq_api_key = st.secrets["GROQ"]["API_KEY"]
 groq_base_url = "https://api.groq.com/openai/v1"
 client = openai.OpenAI(api_key=groq_api_key, base_url=groq_base_url)
 
-# ==========================
 # LOAD MODELS
-# ==========================
 @st.cache_resource
 def load_classifier():
     model = AutoModelForSequenceClassification.from_pretrained(CLASSIFIER_MODEL)
@@ -37,9 +35,7 @@ def load_embedder():
 classifier_model, classifier_tokenizer = load_classifier()
 embedder = load_embedder()
 
-# ==========================
 # UTILITY FUNCTIONS
-# ==========================
 def predict_emergency(text):
     inputs = classifier_tokenizer(
         text,
@@ -62,9 +58,7 @@ def clean_text(text):
     text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text.strip()
 
-# ==========================
 # CATEGORY DETECTION
-# ==========================
 EMERGENCY_CATEGORIES = [
     "fire","flood","earthquake","storm",
     "shooting","violence","medical emergency",
@@ -102,15 +96,31 @@ def detect_categories(text, threshold=0.25, top_k=3):
 
     return list(set(detected))
 
-# ==========================
 # KNOWLEDGE BASE + FAISS
-# ==========================
 KNOWLEDGE_BASE = {
 
     "fire":[
         "Evacuate immediately.",
         "Do not use elevators.",
         "Stay low to avoid smoke."
+    ],
+
+    "flood":[
+        "Move to higher ground immediately.",
+        "Avoid walking or driving through floodwaters.",
+        "Turn off electricity if safe to do so."
+    ],
+
+    "earthquake":[
+        "Drop, cover, and hold on.",
+        "Stay away from windows and heavy objects.",
+        "Evacuate buildings carefully after shaking stops."
+    ],
+
+    "storm":[
+        "Stay indoors and away from windows.",
+        "Secure loose outdoor objects.",
+        "Monitor official weather advisories."
     ],
 
     "violence":[
@@ -129,7 +139,12 @@ KNOWLEDGE_BASE = {
         "Call medical services immediately.",
         "Check breathing and pulse.",
         "Provide first aid if trained."
-    ]
+    ],
+
+    "death incident":[
+        "Secure the area and avoid disturbing the scene.",
+        "Notify authorities immediately.",
+        "Allow trained personnel to handle the situation."]
 }
 
 GENERAL_DOCS = [
@@ -186,9 +201,7 @@ def rag_retrieve(query,categories,k=2):
 
     return list(set(results))
 
-# ==========================
 # SEVERITY + DISPATCH
-# ==========================
 def calculate_severity(confidence,categories):
 
     score = confidence*2 + len(categories)
@@ -236,9 +249,7 @@ def generate_dispatch_units(categories,severity):
 
     return list(units)
 
-# ==========================
 # GROQ SUMMARY
-# ==========================
 def generate_summary_groq(text,docs):
 
     context = " ".join(docs)
@@ -276,9 +287,7 @@ Generate a concise 2–3 sentence emergency summary describing the situation and
 
         return "Summary generation failed."
 
-# ==========================
 # PIPELINE
-# ==========================
 def respondrAI_pipeline(text):
 
     cleaned = clean_text(text)
@@ -305,24 +314,11 @@ def respondrAI_pipeline(text):
 
         summary = generate_summary_groq(text,docs)
 
-    actions = " ".join(docs)
-
-    authorities = "Local police, fire department, and medical emergency services."
-
     advice = "Follow official instructions and prioritize personal safety."
 
     report = f"""
 Situation Summary:
 {summary}
-
-Risk Level:
-The situation is assessed as {severity} based on detected incident categories.
-
-Immediate Actions:
-{actions}
-
-Recommended Authorities:
-{authorities}
 
 Safety Advice:
 {advice}
@@ -340,9 +336,7 @@ Safety Advice:
 
     }
 
-# ==========================
 # STREAMLIT UI
-# ==========================
 st.set_page_config(page_title="RespondrAI Generative RAG",page_icon="🚨")
 
 st.title("🚨 RespondrAI - Emergency Agent")
